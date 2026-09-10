@@ -11,6 +11,7 @@ const sourcePackage = JSON.parse(
 );
 
 const providerExports = [
+  "openai-compatible-transcription",
   "openai-compatible",
   "openai",
   "openrouter",

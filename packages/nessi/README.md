@@ -265,11 +265,62 @@ for await (const event of provider.stream({ messages })) {
 }
 ```
 
+## Audio transcription
+
+Use `openAICompatibleTranscription()` to upload an audio file to a service that
+implements the OpenAI-compatible `/audio/transcriptions` endpoint. Configure
+the service URL, API key and transcription model explicitly:
+
+```ts
+import { openAICompatibleTranscription } from "@k2b/nessi/ai";
+
+const speech = openAICompatibleTranscription("whisper-large-v3", {
+  baseURL: "https://api.scaleway.ai/v1",
+  apiKey: process.env.SCW_SECRET_KEY,
+});
+
+const result = await speech.transcribe({
+  file: Bun.file("./aufnahme.mp3"),
+  filename: "aufnahme.mp3",
+  language: "de",
+  signal: AbortSignal.timeout(120_000),
+});
+
+console.log(result.text);
+```
+
+For OpenAI, set `baseURL: "https://api.openai.com/v1"`, use your OpenAI key and
+a supported transcription model such as `whisper-1`. Local compatible services
+can omit `apiKey`. No environment variable is read automatically. Optional
+`headers` support gateways; `apiKey` overrides their Authorization header.
+
+`file` accepts a `Blob`, `File` or `Bun.file()`. Use `filename` to supply an
+extension for an unnamed Blob or override the filename. Automatically derived
+filenames omit local directories. Omit `language`
+for automatic detection. Optional `prompt` supplies vocabulary or context
+when supported by the model. File formats, size limits and optional parameter
+support depend on the service; Nessi does not convert or split audio.
+
+The result is `{ text: string }`, including an empty string for an empty
+transcript. HTTP, connection and malformed-response errors reject the promise.
+Pass `signal` for cancellation or a timeout; cancellation preserves the signal's
+reason. There are no automatic retries or default timeout.
+
+Transcription uses its own `TranscriptionProvider` contract with `name`, `model`
+and `transcribe(request)`. Custom adapters can implement that interface for other
+protocols. It is separate from the chat provider passed to `nessi()`; pass the
+resulting text into the agent when needed. Streaming transcription, timestamps
+and speaker identification are not exposed.
+
+The example follows [Scaleway's audio API documentation](https://www.scaleway.com/en/docs/generative-apis/how-to/query-audio-models/).
+Keep API keys on the server when integrating a browser application.
+
 ## Focused provider imports
 
 ```ts
 import { anthropic } from "@k2b/nessi/ai/providers/anthropic";
 import { openai } from "@k2b/nessi/ai/providers/openai";
+import { openAICompatibleTranscription } from "@k2b/nessi/ai/providers/openai-compatible-transcription";
 ```
 
 ## Features
@@ -290,6 +341,7 @@ import { openai } from "@k2b/nessi/ai/providers/openai";
 - Standalone `compact()` loop with `loop_start`, `compaction_start`, `compaction_end`, `issue`, and `loop_end` events
 - Optional token-credit budgeting
 - Provider adapters with shared `complete()` and `stream()` APIs
+- Audio transcription through configurable OpenAI-compatible services
 - Native adapters for OpenAI, OpenRouter, vLLM, Ollama, Anthropic, Mistral, and Gemini
 
 ## Package layout
@@ -299,7 +351,7 @@ import { openai } from "@k2b/nessi/ai/providers/openai";
   Agent loop, structured task helper, tools, stores, compaction, shared types
 
 @k2b/nessi/ai
-  Provider factories, provider types, complete(), stream(), responseFormat
+  Provider factories, provider types, complete(), stream(), responseFormat, transcribe()
 
 @k2b/nessi/ai/providers/*
   Focused provider entrypoints

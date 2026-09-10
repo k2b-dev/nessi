@@ -21,6 +21,10 @@ the scope. Future UI container releases use `ghcr.io/k2b-dev/nessi-ui`.
 
 Agent loop at the package root, provider layer under `/ai`.
 
+For audio files, `/ai` also exports `openAICompatibleTranscription()` with a
+separate `transcribe()` API. Configure the endpoint and model for Scaleway,
+OpenAI or another compatible service. See [audio transcription](packages/nessi/README.md#audio-transcription).
+
 ```ts
 import { nessi, memoryStore } from "@k2b/nessi";
 import { openrouter } from "@k2b/nessi/ai";

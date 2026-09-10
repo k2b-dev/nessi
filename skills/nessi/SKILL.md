@@ -1,6 +1,6 @@
 ---
 name: nessi
-description: "Build applications with the @k2b/nessi TypeScript library. Use this skill whenever the user wants to create or modify a CLI, backend endpoint, service, prototype, provider switcher, streaming UI adapter, tool-calling workflow, structured-output task, agent loop, or AI integration using @k2b/nessi. Trigger for questions about root nessi(), nessi.structured(), @k2b/nessi/ai complete(), stream(), provider setup, responseFormat, OpenAI/OpenRouter/vLLM/Ollama/Anthropic/Mistral/Gemini, message formats, multimodal input, canonical block streaming events, issue events for malformed tool streams, dynamic per-turn tool resolution, tool call IDs, loopId correlation, loop_end.aggregate metadata, loop-level stats, local or durable steering, historical tool results, context growth, tool execution events, usage accounting, generation options, provider timeouts, API keys, local models, context-overflow handling, or when choosing whether the provider-only /ai layer is enough versus the root APIs."
+description: "Build applications with the @k2b/nessi TypeScript library. Use for creating or modifying a CLI, backend endpoint, service, prototype, provider switcher, streaming UI adapter, tool-calling workflow, structured-output task, agent loop, or AI integration using @k2b/nessi. Trigger for questions about root nessi(), nessi.structured(), @k2b/nessi/ai complete(), stream(), provider setup, audio transcription, speech-to-text, Scaleway, responseFormat, OpenAI/OpenRouter/vLLM/Ollama/Anthropic/Mistral/Gemini, message formats, multimodal input, canonical block streaming events, issue events for malformed tool streams, dynamic per-turn tool resolution, tool call IDs, loopId correlation, loop_end.aggregate metadata, loop-level stats, local or durable steering, historical tool results, context growth, tool execution events, usage accounting, generation options, provider timeouts, API keys, local models, context-overflow handling, or when choosing whether the provider-only /ai layer is enough versus the root APIs."
 ---
 
 # @k2b/nessi Consumer Skill
@@ -17,11 +17,12 @@ scope.
 2. Identify the provider family: hosted API, OpenRouter aggregation, local Ollama/vLLM, or a custom OpenAI-compatible endpoint.
 3. Decide whether the user needs only the provider layer or the full agent loop:
    - Use `@k2b/nessi/ai` for provider calls, streaming, message normalization, tool-call extraction, and usage data.
+   - For audio transcription, use `openAICompatibleTranscription()` from `/ai` and read `references/providers.md`. It returns a separate `TranscriptionProvider` with `transcribe()`.
    - Use `nessi.structured()` from the package root when the user wants a schema-valid typed task result, optionally with bounded server tools.
    - Use the `@k2b/nessi` root exports when the user wants an agent loop that executes tools, stores conversation history, handles approvals, or compacts context.
 4. Produce working TypeScript that matches the current public API:
    - Root agent APIs come from `@k2b/nessi`.
-   - Provider constructors come from `@k2b/nessi/ai`, take `(model, options?)`, then expose `complete(request)` and `stream(request)`.
+   - Chat provider constructors come from `@k2b/nessi/ai`, then expose `complete(request)` and `stream(request)`. The transcription constructor takes `(model, options)` with a required `baseURL`.
 
 ## Reference routing
 
@@ -30,7 +31,7 @@ Read only the references needed for the task:
 | Need | Read |
 | --- | --- |
 | Minimal setup, imports, complete() examples | `references/quickstart.md` |
-| Choosing and configuring providers | `references/providers.md` |
+| Choosing and configuring providers, audio transcription and Scaleway | `references/providers.md` |
 | Message shapes, files, stream events, usage | `references/messages-and-streaming.md` |
 | Tool-call flow, errors, retries, context overflow | `references/tools-and-errors.md` |
 

@@ -1,12 +1,50 @@
 # Provider Setup
 
-All provider constructors return a `Provider` with the same consumer-facing interface:
+Chat provider constructors return a `Provider` with the same consumer-facing interface:
 
 ```ts
 const provider = providerFactory(model, options);
 await provider.complete(request);
 for await (const event of provider.stream(request)) {}
 ```
+
+## Audio transcription
+
+Use `openAICompatibleTranscription(model, options)` from `@k2b/nessi/ai` for
+speech-to-text file uploads. It returns a separate `TranscriptionProvider` with
+`name`, `model` and `transcribe(request)`, not a chat `Provider`.
+
+```ts
+import { openAICompatibleTranscription } from "@k2b/nessi/ai";
+
+const speech = openAICompatibleTranscription("whisper-large-v3", {
+  baseURL: "https://api.scaleway.ai/v1",
+  apiKey: process.env.SCW_SECRET_KEY,
+});
+const { text } = await speech.transcribe({
+  file: Bun.file("./aufnahme.mp3"),
+  filename: "aufnahme.mp3",
+  language: "de",
+  signal: AbortSignal.timeout(120_000),
+});
+```
+
+- `baseURL` is required. The adapter appends `/audio/transcriptions` and uploads
+  multipart form data requesting a JSON result. It reads no environment variables.
+- Change URL, key and model for other compatible services. For OpenAI use
+  `https://api.openai.com/v1` and a transcription model such as `whisper-1`.
+- `apiKey` is optional for local services. `headers` supports gateway headers;
+  an explicit API key overrides Authorization. Fetch supplies the multipart boundary.
+- `file` accepts `Blob`, `File` and `Bun.file()`. Supply `filename` for unnamed
+  Blobs that need an extension; otherwise the basename is preserved without local directories.
+- `language` is optional (for example `de`); omission allows detection.
+  `prompt` is an optional context hint subject to model support.
+- Results contain only `{ text: string }`. Errors reject; cancellation uses the
+  signal reason. There is no default timeout or automatic retry.
+- Do not promise timestamps, speaker identification, streaming, transcoding or
+  automatic file splitting. Formats, limits and optional fields depend on the service.
+- For other protocols, implement the exported `TranscriptionProvider` interface.
+  Pass transcript text into the agent; do not pass this provider to `nessi()`.
 
 ## Structured output support
 
