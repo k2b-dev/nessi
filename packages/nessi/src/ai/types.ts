@@ -255,6 +255,7 @@ export type OpenAICompat = {
   supportsUsageInStreaming?: boolean;
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
+  /** Defaults to details, then reasoning/reasoning_content. "text" prefers the text fields; "none" disables thinking. */
   thinkingFormat?: "none" | "reasoning_details" | "text";
   maxTokensField?: "max_tokens" | "max_completion_tokens";
   structuredOutput?: "response_format" | "vllm_structured_outputs" | false;

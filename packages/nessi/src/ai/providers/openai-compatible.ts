@@ -42,6 +42,7 @@ type SSEChunk = {
     delta: {
       content?: string | null;
       reasoning?: string | null;
+      reasoning_content?: string | null;
       reasoning_details?: Array<{
         type?: string;
         text?: string;
@@ -193,13 +194,13 @@ const usageFromChunk = (chunk: SSEChunk, config: OpenAICompatibleConfig): Usage 
 };
 
 const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleConfig) => {
-  if (config.compat?.thinkingFormat === "text") return delta.reasoning ?? "";
-  if (config.compat?.thinkingFormat === "reasoning_details") {
-    return (delta.reasoning_details ?? [])
-      .map((detail: { text?: string; summary?: string }) => detail.text ?? detail.summary ?? "")
-      .join("");
-  }
-  return "";
+  if (config.compat?.thinkingFormat === "none") return "";
+  const text = delta.reasoning || delta.reasoning_content || "";
+  const details = (delta.reasoning_details ?? [])
+    .map((detail) => detail.text ?? detail.summary ?? "")
+    .join("");
+  // Select one representation per delta; providers may send the same text in multiple fields.
+  return config.compat?.thinkingFormat === "text" ? text || details : details || text;
 };
 
 const parseCompletionResponse = async (response: Response, config: OpenAICompatibleConfig): Promise<GenerateResult> => {

@@ -129,13 +129,26 @@ const custom = openAICompatible({
   apiKey: process.env.INTERNAL_AI_KEY,
   compat: {
     supportsUsageInStreaming: true,
-    thinkingFormat: "none",
     maxTokensField: "max_tokens",
   },
 });
 ```
 
 Use `openAICompatible` when a gateway follows Chat Completions semantics closely enough but needs explicit compatibility flags.
+
+Since `@k2b/nessi` 0.12.1, generic OpenAI-compatible streams recognize
+`delta.reasoning_content` without an extra compatibility setting. The default
+priority is readable `reasoning_details`, then `reasoning`, then
+`reasoning_content`. `thinkingFormat: "text"` prefers `reasoning`, then
+`reasoning_content`, with readable details as a fallback. Only one representation
+is emitted per frame, so parallel fields do not duplicate thinking text.
+
+Consume these through the existing `block_start` (`kind: "thinking"`),
+`block_delta`, and `block_end` events; see [Messages and streaming](messages-and-streaming.md).
+To hide thinking, explicitly set `thinkingFormat: "none"`. The `vllm()` preset
+still uses this opt-out; use `openAICompatible()` when you want thinking from a
+vLLM endpoint. Do not log reasoning content or raise timeouts to compensate for
+missing visible progress.
 
 Use `timeouts` for vLLM/OpenAI-compatible streams that may stall or emit malformed partial tool calls:
 
