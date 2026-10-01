@@ -298,6 +298,10 @@ const directStructured = async <TOutput extends z.ZodType>(
     const requestStartedAt = Date.now();
     try {
       return await options.provider.complete(request);
+    } catch (error) {
+      // Match the tool-loop mode, which reports provider failures as StructuredOutputError.
+      const code = options.signal?.aborted ? "aborted" : "loop_failed";
+      throw new StructuredOutputError(toErrorMessage(error), code, { cause: error });
     } finally {
       generationMs += Math.max(0, Date.now() - requestStartedAt);
     }

@@ -59,6 +59,7 @@ export const compact = (options: CompactOptions): CompactLoop => {
         provider,
         usage,
         force,
+        signal,
       });
 
       if (!operation) {

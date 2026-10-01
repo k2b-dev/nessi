@@ -341,6 +341,8 @@ export type CompactContext = {
   force: boolean;
   /** Estimated fill ratio (estimatedTokens / contextWindow). Only set when contextWindow is known. */
   fillRatio?: number;
+  /** Aborted when the surrounding loop or compact() run is aborted. Pass it to provider calls. */
+  signal?: AbortSignal;
 }
 
 export type CompactOptions = {

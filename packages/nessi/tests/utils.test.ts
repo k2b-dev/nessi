@@ -1,6 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import {
+  closeUnansweredToolCalls,
   estimateTokens,
+  INTERRUPTED_TOOL_RESULT,
   projectHistoricalToolResults,
   zeroUsage,
   toErrorMessage,
@@ -165,5 +167,35 @@ describe("toErrorMessage", () => {
   it("stringifies non-Error values", () => {
     expect(toErrorMessage("oops")).toBe("oops");
     expect(toErrorMessage(42)).toBe("42");
+  });
+});
+
+describe("closeUnansweredToolCalls", () => {
+  const assistant = (ids: string[]): Message => ({
+    role: "assistant",
+    content: ids.map((id) => ({ type: "tool_call" as const, id, name: "echo", args: {} })),
+  });
+
+  it("adds error results for unanswered calls after the existing results", () => {
+    const messages: Message[] = [
+      { role: "user", content: [{ type: "text", text: "go" }] },
+      assistant(["a", "b"]),
+      { role: "tool_result", callId: "a", name: "echo", result: "ok" },
+      { role: "user", content: [{ type: "text", text: "next" }] },
+    ];
+
+    const closed = closeUnansweredToolCalls(messages);
+
+    expect(closed.map((message) => message.role)).toEqual(["user", "assistant", "tool_result", "tool_result", "user"]);
+    expect(closed[3]).toEqual({ role: "tool_result", callId: "b", name: "echo", result: INTERRUPTED_TOOL_RESULT, isError: true });
+    expect(messages).toHaveLength(4);
+  });
+
+  it("leaves fully answered histories unchanged", () => {
+    const messages: Message[] = [
+      assistant(["a"]),
+      { role: "tool_result", callId: "a", name: "echo", result: "ok" },
+    ];
+    expect(closeUnansweredToolCalls(messages)).toEqual(messages);
   });
 });

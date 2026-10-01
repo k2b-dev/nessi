@@ -154,6 +154,24 @@ describe("nessi.structured", () => {
     }
   });
 
+  it("wraps direct-mode provider failures in StructuredOutputError", async () => {
+    const provider: Provider = {
+      ...mockProvider([]),
+      complete: async () => {
+        throw new Error("upstream unavailable");
+      },
+    };
+
+    const caught = await nessi.structured({
+      provider,
+      input: "Return ok.",
+      output: z.object({ ok: z.boolean() }),
+    }).catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(StructuredOutputError);
+    expect(caught).toMatchObject({ code: "loop_failed", message: "upstream unavailable" });
+  });
+
   it("falls back when a native provider receives a schema outside strict native constraints", async () => {
     const { provider, requests } = completeProvider([
       "{\"title\":\"Launch\"}",

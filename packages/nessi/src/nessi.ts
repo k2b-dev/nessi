@@ -31,8 +31,8 @@ import { aggregateFromTurns, buildLoopTiming, cloneUsage } from "./aggregates.js
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./ai/shared/messages.js";
 import { toolToSpec } from "./tools.js";
 import {
+  closeUnansweredToolCalls,
   createLoopId,
-  estimateTokens,
   projectHistoricalToolResults,
   toErrorMessage,
   truncateToolResults,
@@ -239,7 +239,6 @@ const timeoutMsFor = (tool: Tool) => {
 const withTimeout = async <T>(
   run: (signal?: AbortSignal) => Promise<T>,
   timeoutMs: number | undefined,
-  onTimeout: () => void,
 ): Promise<{ ok: true; value: T } | { ok: false }> => {
   if (!timeoutMs) return { ok: true, value: await run() };
   const timeoutController = new AbortController();
@@ -248,7 +247,6 @@ const withTimeout = async <T>(
   try {
     timeout = setTimeout(() => {
       timedOut = true;
-      onTimeout();
       timeoutController.abort();
     }, timeoutMs);
     return { ok: true, value: await run(timeoutController.signal) };
@@ -288,6 +286,32 @@ const linkedAbortSignal = (signals: Array<AbortSignal | undefined>) => {
     },
   };
 };
+
+// ----------------------------------------------------------------------------
+// Timing
+// ----------------------------------------------------------------------------
+
+type LoopTimingAccumulator = {
+  loopStartedAt?: number;
+  generationMs: number;
+  toolExecutionMs: number;
+  actionWaitMs: number;
+};
+
+const nowMs = () => Date.now();
+
+const elapsedSince = (startedAt: number) => Math.max(0, nowMs() - startedAt);
+
+const snapshotTiming = (
+  timing: LoopTimingAccumulator,
+  usage: Usage | undefined,
+): LoopTimingAggregate =>
+  buildLoopTiming({
+    wallMs: timing.loopStartedAt === undefined ? 0 : elapsedSince(timing.loopStartedAt),
+    generationMs: timing.generationMs,
+    toolExecutionMs: timing.toolExecutionMs,
+    actionWaitMs: timing.actionWaitMs,
+  }, usage);
 
 // ----------------------------------------------------------------------------
 // Aggregate reconstruction
@@ -389,48 +413,56 @@ const coalesceOutboundEvents = async function* (
     yield event;
   };
 
-  while (true) {
-    const raced = await (timer
-      ? Promise.race([
-          next.then((result) => ({ type: "event" as const, result })),
-          timer,
-        ])
-      : next.then((result) => ({ type: "event" as const, result })));
+  let sourceDone = false;
+  try {
+    while (true) {
+      const raced = await (timer
+        ? Promise.race([
+            next.then((result) => ({ type: "event" as const, result })),
+            timer,
+          ])
+        : next.then((result) => ({ type: "event" as const, result })));
 
-    if (raced.type === "timer") {
-      if (raced.seq !== timerSeq) continue;
-      yield* flush();
-      continue;
-    }
+      if (raced.type === "timer") {
+        if (raced.seq !== timerSeq) continue;
+        yield* flush();
+        continue;
+      }
 
-    const { result } = raced;
-    if (result.done) {
-      yield* flush();
-      return;
-    }
-    next = iterator.next();
-    const event = result.value;
+      const { result } = raced;
+      if (result.done) {
+        sourceDone = true;
+        yield* flush();
+        return;
+      }
+      next = iterator.next();
+      const event = result.value;
 
-    if (event.type !== "block_delta") {
-      yield* flush();
-      yield event;
-      continue;
-    }
+      if (event.type !== "block_delta") {
+        yield* flush();
+        yield event;
+        continue;
+      }
 
-    if (!buffer) {
-      buffer = event;
-      startTimer();
-    } else if (canMergeDelta(buffer, event)) {
-      buffer = { ...buffer, delta: buffer.delta + event.delta };
-    } else {
-      yield* flush();
-      buffer = event;
-      startTimer();
-    }
+      if (!buffer) {
+        buffer = event;
+        startTimer();
+      } else if (canMergeDelta(buffer, event)) {
+        buffer = { ...buffer, delta: buffer.delta + event.delta };
+      } else {
+        yield* flush();
+        buffer = event;
+        startTimer();
+      }
 
-    if (maxChars && buffer.delta.length >= maxChars) {
-      yield* flush();
+      if (maxChars && buffer.delta.length >= maxChars) {
+        yield* flush();
+      }
     }
+  } finally {
+    // Close the source when the consumer stops early. A source request is usually still in
+    // flight, so don't block the consumer on it.
+    if (!sourceDone) void Promise.resolve(iterator.return?.()).catch(() => {});
   }
 }
 
@@ -669,30 +701,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       name: tc.name,
       result,
       isError: true,
-  };
-}
-
-type LoopTimingAccumulator = {
-  loopStartedAt?: number;
-  generationMs: number;
-  toolExecutionMs: number;
-  actionWaitMs: number;
-};
-
-const nowMs = () => Date.now();
-
-const elapsedSince = (startedAt: number) => Math.max(0, nowMs() - startedAt);
-
-const snapshotTiming = (
-  timing: LoopTimingAccumulator,
-  usage: Usage | undefined,
-): LoopTimingAggregate =>
-  buildLoopTiming({
-    wallMs: timing.loopStartedAt === undefined ? 0 : elapsedSince(timing.loopStartedAt),
-    generationMs: timing.generationMs,
-    toolExecutionMs: timing.toolExecutionMs,
-    actionWaitMs: timing.actionWaitMs,
-  }, usage);
+    };
+  }
 
   async function* executeToolCall(
     tc: ToolCallBlock,
@@ -751,7 +761,7 @@ const snapshotTiming = (
       }
 
       const pulled = await waitForActionResponse(actionWaitStartedAt, () =>
-        withTimeout((signal) => pullMatching(matchesToolResult, signal), timeoutMs, () => {}),
+        withTimeout((signal) => pullMatching(matchesToolResult, signal), timeoutMs),
       );
       if (!pulled.ok) {
         const issue = timeoutIssue();
@@ -809,7 +819,7 @@ const snapshotTiming = (
         };
       }
       const pulled = await waitForActionResponse(actionWaitStartedAt, () =>
-        withTimeout((signal) => pullMatching(matchesApproval, signal), timeoutMs, () => {}),
+        withTimeout((signal) => pullMatching(matchesApproval, signal), timeoutMs),
       );
       if (!pulled.ok) {
         const issue = timeoutIssue();
@@ -838,6 +848,23 @@ const snapshotTiming = (
     if (signal.aborted) abortTool();
     else signal.addEventListener("abort", abortTool, { once: true });
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let resolveLoopAborted: (() => void) | undefined;
+    const loopAborted = new Promise<{ kind: "aborted" }>((resolve) => {
+      resolveLoopAborted = () => resolve({ kind: "aborted" });
+      if (signal.aborted) resolveLoopAborted();
+      else signal.addEventListener("abort", resolveLoopAborted, { once: true });
+    });
+    // Nested approval/client waits share the tool's deadline: toolAbort fires on timeout or loop abort.
+    const pullWithinToolDeadline = async <T extends InboundEvent>(
+      match: (event: InboundEvent) => event is T,
+    ): Promise<T | undefined> => {
+      try {
+        return await pullMatching(match, toolAbort.signal);
+      } catch (error) {
+        if (error instanceof PullCancelledError) return undefined;
+        throw error;
+      }
+    };
     const toolStartedAt = nowMs();
     const actionWaitMsAtToolStart = timing.actionWaitMs;
     let toolExecutionRecorded = false;
@@ -885,7 +912,14 @@ const snapshotTiming = (
         },
       };
 
-      const resultPromise = tool.execute(validatedInput, ctx);
+      // Settle once and capture rejections so a tool that finishes after a timeout or abort
+      // cannot cause an unhandled rejection.
+      const toolOutcome = Promise.resolve()
+        .then(() => tool.execute(validatedInput, ctx))
+        .then(
+          (value) => ({ kind: "done" as const, result: value as unknown }),
+          (error: unknown) => ({ kind: "failed" as const, error }),
+        );
       let timeout: Promise<{ kind: "timeout" }> | undefined;
       if (timeoutMs) {
         timeout = new Promise((resolve) => {
@@ -904,10 +938,14 @@ const snapshotTiming = (
           else queueNotify = () => resolve({ kind: "queue" });
         });
         const settled = await Promise.race([
-          resultPromise.then((value) => ({ kind: "done" as const, result: value })),
+          toolOutcome,
           waitForQueue,
+          loopAborted,
           ...(timeout ? [timeout] : []),
         ]);
+
+        if (settled.kind === "aborted") throw new LoopAbortedError();
+        if (settled.kind === "failed") throw settled.error;
 
         if (settled.kind === "timeout") {
           const issue = timeoutIssue();
@@ -945,13 +983,9 @@ const snapshotTiming = (
             };
           }
           const response = await waitForActionResponse(actionWaitStartedAt, () =>
-            withTimeout(
-              (signal) => pullMatching(matchesCustomApproval, signal),
-              timeoutMs,
-              () => toolAbort.abort(),
-            ),
+            pullWithinToolDeadline(matchesCustomApproval),
           );
-          if (!response.ok) {
+          if (!response) {
             const issue = timeoutIssue();
             const timeoutResult = issueToToolResult(issue);
             await appendToolResult(tc.id, tc.name, timeoutResult, true);
@@ -962,7 +996,7 @@ const snapshotTiming = (
             yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: timeoutResult, isError: true };
             return;
           }
-          req.resolve(response.value.approved);
+          req.resolve(response.approved);
         }
 
         while (clientToolQueue.length > 0) {
@@ -1005,13 +1039,9 @@ const snapshotTiming = (
             };
           }
           const response = await waitForActionResponse(actionWaitStartedAt, () =>
-            withTimeout(
-              (signal) => pullMatching(matchesClientResult, signal),
-              timeoutMs,
-              () => toolAbort.abort(),
-            ),
+            pullWithinToolDeadline(matchesClientResult),
           );
-          if (!response.ok) {
+          if (!response) {
             const issue = timeoutIssue();
             const timeoutResult = issueToToolResult(issue);
             await appendToolResult(tc.id, tc.name, timeoutResult, true);
@@ -1022,7 +1052,7 @@ const snapshotTiming = (
             yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: timeoutResult, isError: true };
             return;
           }
-          let output = response.value.result;
+          let output = response.result;
           if (bridgeTool?.kind === "client" && bridgeTool.def.outputSchema) {
             const outputResult = bridgeTool.def.outputSchema.safeParse(output);
             if (!outputResult.success) {
@@ -1083,6 +1113,7 @@ const snapshotTiming = (
       finishToolExecution();
       if (timeoutHandle) clearTimeout(timeoutHandle);
       signal.removeEventListener("abort", abortTool);
+      if (resolveLoopAborted) signal.removeEventListener("abort", resolveLoopAborted);
     }
   }
 
@@ -1099,8 +1130,6 @@ const snapshotTiming = (
 
   async function* resumePendingToolCalls(turnCtx: TurnContext): AsyncGenerator<OutboundEvent> {
     const entries = await store.load();
-    const seeded = aggregateTurnsFromEntries(entries);
-    loopTurns.splice(0, loopTurns.length, ...seeded);
 
     let lastAssistantIdx = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -1112,6 +1141,9 @@ const snapshotTiming = (
       }
     }
     if (lastAssistantIdx < 0) return;
+
+    // Only a trailing assistant exchange continues in this loop; a trailing user message starts a fresh one.
+    loopTurns.splice(0, loopTurns.length, ...aggregateTurnsFromEntries(entries));
 
     const entry = entries[lastAssistantIdx]!;
     if (entry.kind === "summary") return;
@@ -1161,7 +1193,7 @@ const snapshotTiming = (
     let compactionRetried = false;
     const prepareProviderMessages = (sourceEntries: StoreEntry[]): Message[] => {
       const rawMessages = sourceEntries.map((entry) => entry.message);
-      const projectedMessages = projectHistoricalToolResults(rawMessages, loopId);
+      const projectedMessages = closeUnansweredToolCalls(projectHistoricalToolResults(rawMessages, loopId));
       return typeof maxToolResultChars === "number"
         ? truncateToolResults(projectedMessages, maxToolResultChars)
         : projectedMessages;
@@ -1171,6 +1203,11 @@ const snapshotTiming = (
     yield { type: "loop_start", agentId, loopId };
 
     try {
+      if (signal.aborted) {
+        yield loopEndEvent("aborted");
+        return;
+      }
+
       if (input !== undefined) {
         await store.append(normalizeInput(input));
       } else {
@@ -1235,9 +1272,22 @@ const snapshotTiming = (
             usage: lastUsage,
             force: shouldForce,
             fillRatio,
+            signal,
           });
           if (compaction) {
-            yield* runCompaction(compaction);
+            // Routine compaction is best effort: report a failure and continue with the current history.
+            try {
+              yield* runCompaction(compaction);
+            } catch (error) {
+              if (signal.aborted) throw error;
+              const issue: NessiIssue = {
+                kind: "runtime_error",
+                message: `Compaction failed: ${toErrorMessage(error)}`,
+                retryable: false,
+              };
+              recordIssue(issue);
+              yield issueEvent(issue);
+            }
             entries = await store.load();
             messages = prepareProviderMessages(entries);
           }
@@ -1393,6 +1443,7 @@ const snapshotTiming = (
               usage: lastUsage,
               force: true,
               fillRatio,
+              signal,
             });
             if (compaction) {
               yield* runCompaction(compaction);
@@ -1525,6 +1576,8 @@ const snapshotTiming = (
           return result;
         },
         async return(value?: OutboundEvent) {
+          // Stopping iteration early ends the loop: cancel running tools and provider requests.
+          abortController.abort();
           return generator.return(value as OutboundEvent);
         },
         async throw(error?: unknown) {

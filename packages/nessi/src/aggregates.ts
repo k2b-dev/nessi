@@ -96,7 +96,6 @@ const cloneTurn = (turn: LoopTurnAggregate): LoopTurnAggregate => ({
 export const aggregateFromTurns = (
   turns: LoopTurnAggregate[],
   loopIssues: LoopIssueAggregate[] = [],
-  timing?: LoopTimingAggregate,
 ): LoopAggregate => {
   const clonedTurns = turns.map(cloneTurn);
   const issues = loopIssues.length > 0
@@ -109,7 +108,6 @@ export const aggregateFromTurns = (
   return {
     turns: clonedTurns,
     usage,
-    ...(timing ? { timing: cloneTiming(timing) } : {}),
     issueCount: issues.length,
     issues: issues.map(cloneIssue),
     toolCallCount: clonedTurns.reduce((count, turn) => count + turn.toolCalls.length, 0),

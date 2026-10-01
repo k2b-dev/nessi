@@ -17,6 +17,7 @@ export type {
   // Core
   NessiOptions,
   NessiLoop,
+  CoalesceOptions,
   SteeringContext,
   SteeringFn,
   StructuredInput,
@@ -33,6 +34,8 @@ export type {
   OutboundEvent,
   InboundEvent,
   DoneReason,
+  ToolActionKind,
+  NessiIssue,
   LoopAggregate,
   LoopTimingAggregate,
   LoopTurnAggregate,

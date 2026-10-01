@@ -264,6 +264,13 @@ const result = await provider.complete({
 });
 ```
 
+Aborting a root `nessi()` loop with `loop.abort()`, its `signal`, or by leaving
+the `for await` early cancels the provider request and the `ctx.signal` of a
+running tool. The loop then ends with `loop_end` reason `aborted`. Unfinished
+tool calls stay unanswered in the store, so a later loop without `input` resumes
+them. A later loop with new `input` sends them to the provider as error results
+instead. A `compact` function receives the loop signal as `ctx.signal`.
+
 Use `disableReasoning: true` for simple calls where reasoning-capable models would otherwise spend too much output budget. Root `nessi()` accepts the same generation controls:
 
 ```ts

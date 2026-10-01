@@ -322,3 +322,43 @@ describe("nessi abort while waiting for inbound events", () => {
     expect(entries.some((entry) => entry.message.role === "tool_result")).toBe(false);
   });
 });
+
+describe("nessi history after an aborted tool call", () => {
+  it("answers the orphaned call before the next user message without changing the store", async () => {
+    const store = memoryStore();
+    const firstProvider = mockProvider([
+      { type: "tool_start", callId: "call-1", name: "danger" },
+      { type: "tool_call", callId: "call-1", name: "danger", args: { action: "wipe" } },
+      { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "tool_use" },
+    ]);
+    const first = nessi({ provider: firstProvider, store, systemPrompt: "sys", input: "Do it", tools: [dangerTool] });
+    for await (const event of first) {
+      if (event.type === "tool_action_request") first.abort();
+    }
+
+    let sentRoles: string[] = [];
+    let sentResult: unknown;
+    const secondProvider = mockProvider([
+      { type: "text", delta: "Okay." },
+      { type: "usage", usage: { input: 1, output: 1, total: 2 } },
+    ], {
+      onRequest: (request) => {
+        sentRoles = request.messages.map((message) => message.role);
+        sentResult = request.messages.find((message) => message.role === "tool_result");
+      },
+    });
+    const events = await collectEvents(nessi({
+      provider: secondProvider,
+      store,
+      systemPrompt: "sys",
+      input: "Never mind",
+      tools: [dangerTool],
+    }));
+
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "stop" });
+    expect(sentRoles).toEqual(["user", "assistant", "tool_result", "user"]);
+    expect(sentResult).toMatchObject({ callId: "call-1", name: "danger", isError: true });
+    const entries = await store.load();
+    expect(entries.some((entry) => entry.message.role === "tool_result")).toBe(false);
+  });
+});
