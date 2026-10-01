@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "../shared/errors.js";
+import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
@@ -33,6 +33,8 @@ type OllamaResponse = {
     tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
   };
   done: boolean;
+  done_reason?: string;
+  error?: string;
   prompt_eval_count?: number;
   eval_count?: number;
 };
@@ -107,10 +109,22 @@ const toolCallsFromResponse = (response: OllamaResponse): ToolCallBlock[] =>
     args: toolCall.function.arguments,
   }));
 
+const generationOptions = (request: GenerateRequest, options?: OllamaOptions) => {
+  const result: Record<string, unknown> = {};
+  const temperature = request.temperature ?? options?.temperature;
+  if (temperature !== undefined) result.temperature = temperature;
+  if (request.maxOutputTokens !== undefined) result.num_predict = request.maxOutputTokens;
+  return Object.keys(result).length > 0 ? result : undefined;
+};
+
+const finishReasonFrom = (response: OllamaResponse, hasTools: boolean) => {
+  if (response.done_reason === "length") return "max_tokens" as const;
+  return hasTools ? "tool_use" as const : "stop" as const;
+};
+
 export const ollama = (model: string, options?: OllamaOptions): Provider => {
   const baseURL = (options?.baseURL ?? "http://localhost:11434").replace(/\/+$/, "");
   const contextWindow = options?.contextWindow ?? 128_000;
-  const resolveTemperature = (request: GenerateRequest) => request.temperature ?? options?.temperature;
 
   return {
     name: "ollama",
@@ -134,8 +148,8 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
       if (request.responseFormat) body.format = request.responseFormat.schema;
-      const temperature = resolveTemperature(request);
-      if (temperature !== undefined) body.options = { temperature };
+      const generation = generationOptions(request, options);
+      if (generation) body.options = generation;
 
       const response = await fetch(`${baseURL}/api/chat`, {
         method: "POST",
@@ -155,7 +169,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       if (!payload) throw new Error("ollama returned invalid JSON.");
       const usage = usageFromResponse(payload, options);
       const toolCalls = toolCallsFromResponse(payload);
-      const finishReason = toolCalls.length > 0 ? "tool_use" : "stop";
+      const finishReason = finishReasonFrom(payload, toolCalls.length > 0);
 
       return {
         message: buildAssistantMessage(model, payload.message?.content ?? "", "", toolCalls, usage, finishReason),
@@ -174,8 +188,8 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
       if (request.responseFormat) body.format = request.responseFormat.schema;
-      const temperature = resolveTemperature(request);
-      if (temperature !== undefined) body.options = { temperature };
+      const generation = generationOptions(request, options);
+      if (generation) body.options = generation;
 
       let response: Response;
       const controller = new AbortController();
@@ -246,6 +260,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       }
 
       let toolCounter = 0;
+      let sawDone = false;
       const streamTimeouts = options?.timeouts ? { ...options.timeouts } : undefined;
       if (firstByteDeadline && streamTimeouts) {
         streamTimeouts.firstByteMs = Math.max(1, firstByteDeadline - Date.now());
@@ -253,6 +268,10 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
 
       try {
         for await (const chunk of parseNDJSON<OllamaResponse>(reader, streamTimeouts)) {
+          if (chunk.error) {
+            yield { type: "error", error: `ollama stream error: ${chunk.error}`, retryable: true };
+            return;
+          }
           if (chunk.message?.content) yield { type: "text", delta: chunk.message.content };
           for (const toolCall of chunk.message?.tool_calls ?? []) {
             const callId = `ollama-${toolCounter++}`;
@@ -265,9 +284,15 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
             };
           }
           if (chunk.done) {
-            yield { type: "usage", usage: usageFromResponse(chunk, options) };
+            sawDone = true;
+            yield {
+              type: "usage",
+              usage: usageFromResponse(chunk, options),
+              finishReason: finishReasonFrom(chunk, toolCounter > 0),
+            };
           }
         }
+        if (!sawDone) yield streamEndedError("ollama");
       } finally {
         cleanupExternalAbort();
         controller.abort();

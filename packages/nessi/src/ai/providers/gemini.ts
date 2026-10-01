@@ -1,6 +1,6 @@
-import { formatConnectionError, normalizeHttpError } from "../shared/errors.js";
+import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse } from "../shared/json.js";
+import { safeJsonParse } from "../shared/json.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toGeminiTools } from "../shared/tools.js";
@@ -36,6 +36,7 @@ type GeminiResponse = {
   usageMetadata?: {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
     totalTokenCount?: number;
   };
 };
@@ -49,6 +50,15 @@ export type GeminiOptions = {
   creditsPerInputToken?: number;
   creditsPerOutputToken?: number;
   timeouts?: ProviderTimeouts;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// Gemini expects an object; "output" and "error" are the documented keys for wrapped values.
+const functionResponseBody = (result: unknown, isError: boolean | undefined): Record<string, unknown> => {
+  if (isError) return { error: result };
+  return isPlainObject(result) ? result : { output: result };
 };
 
 const convertMessages = (messages: Message[]) => {
@@ -79,15 +89,16 @@ const convertMessages = (messages: Message[]) => {
       continue;
     }
 
-    out.push({
-      role: "user",
-      parts: [{
-        functionResponse: {
-          name: message.name,
-          response: ensureRecord(message.result),
-        },
-      }],
-    });
+    const part: GeminiPart = {
+      functionResponse: {
+        name: message.name,
+        response: functionResponseBody(message.result, message.isError),
+      },
+    };
+    // Responses to parallel calls must share one content entry.
+    const last = out.at(-1);
+    if (last?.role === "user" && last.parts.every((existing) => existing.functionResponse)) last.parts.push(part);
+    else out.push({ role: "user", parts: [part] });
   }
   return out;
 };
@@ -96,7 +107,8 @@ const usageFromResponse = (response: GeminiResponse, options?: GeminiOptions) =>
   applyCredits(
     makeUsage(
       response.usageMetadata?.promptTokenCount ?? 0,
-      response.usageMetadata?.candidatesTokenCount ?? 0,
+      // Thinking tokens are billed as output; other providers include them in output too.
+      (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0),
     ),
     options?.creditsPerInputToken,
     options?.creditsPerOutputToken,
@@ -217,14 +229,14 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       let toolCounter = 0;
       const requestId = createRequestId();
       let latestUsage: ReturnType<typeof usageFromResponse> | undefined;
-      let latestFinishReason: GenerateResult["finishReason"] | undefined;
+      let rawFinishReason: string | undefined;
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
         const payload = safeJsonParse<GeminiResponse>(event.data);
         if (!payload) continue;
         const candidate = payload.candidates?.[0];
         const parts = candidate?.content?.parts ?? [];
-        latestFinishReason = mapFinishReason(candidate?.finishReason, parts.some((part) => Boolean(part.functionCall)));
+        if (candidate?.finishReason) rawFinishReason = candidate.finishReason;
         for (const part of parts) {
           if (part.text) yield { type: "text", delta: part.text };
           if (part.functionCall) {
@@ -238,17 +250,18 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
             };
           }
         }
-        const usage = usageFromResponse(payload, options);
-        latestUsage = usage;
-        if (usage.total > 0) yield { type: "usage", usage };
+        // usageMetadata is cumulative; report it once at the end so text blocks stay intact.
+        if (payload.usageMetadata) latestUsage = usageFromResponse(payload, options);
       }
-      if (latestFinishReason) {
-        yield {
-          type: "usage",
-          usage: latestUsage ?? makeUsage(),
-          finishReason: latestFinishReason,
-        };
+      if (!rawFinishReason) {
+        yield streamEndedError("gemini");
+        return;
       }
+      yield {
+        type: "usage",
+        usage: latestUsage ?? makeUsage(),
+        finishReason: mapFinishReason(rawFinishReason, toolCounter > 0),
+      };
       };
       return normalizeProviderStream(raw(), { suppressTextAfterMalformedTool: true });
     },

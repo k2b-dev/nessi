@@ -177,9 +177,9 @@ export type GenerateRequest = {
    * Ask the provider to skip (or minimize) internal reasoning for this call.
    * Useful for simple generative tasks where reasoning tokens would otherwise
    * consume the entire output budget. Provider-specific mapping:
-   * - openai-compatible: sets `reasoning_effort: "low"`
+   * - openai-compatible (including openai, openrouter, vllm): sets `reasoning_effort: "low"`
    * - gemini: sets `thinkingConfig.thinkingBudget: 0`
-   * - anthropic/mistral/ollama/vllm: no-op (reasoning is opt-in or absent)
+   * - anthropic/mistral/ollama: no-op (reasoning is opt-in or absent)
    */
   disableReasoning?: boolean;
 };

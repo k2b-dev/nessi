@@ -1,0 +1,6 @@
+data: {"choices":[{"index":0,"delta":{"content":"abc"},"finish_reason":"length"}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":3,"completion_tokens":4}}
+
+data: [DONE]
+

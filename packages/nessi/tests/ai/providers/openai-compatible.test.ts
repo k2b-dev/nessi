@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openAICompatible, openrouter, vllm } from "../../../src/ai/index.js";
+import { completeFromStream, openAICompatible, openrouter, vllm } from "../../../src/ai/index.js";
 import { expectProviderContract } from "../contracts/provider-contract.js";
 import { fixtureJson, fixtureText, jsonResponse, textResponse } from "../helpers/fixtures.js";
 import type { OpenAICompat } from "../../../src/ai/types.js";
@@ -280,5 +280,57 @@ describe("openAICompatible provider", () => {
     });
 
     expect(provider.capabilities.structuredOutput).toBe(false);
+  });
+  const streamFixture = async (fixture: string) => {
+    globalThis.fetch = (async () => textResponse(await fixtureText(fixture), "text/event-stream")) as typeof fetch;
+    const provider = openAICompatible({ name: "custom", model: "gpt-test", baseURL: "https://example.com/v1" });
+    const events = [];
+    for await (const event of provider.stream({ messages: [] })) events.push(event);
+    return events;
+  };
+
+  it("reports a stream that ends without finish reason or [DONE] as a retryable provider error", async () => {
+    const events = await streamFixture("../fixtures/openai/truncated.sse");
+
+    expect(events.at(-1)).toMatchObject({ type: "issue", issue: { kind: "provider_error", retryable: true } });
+    expect(events.some((event) => event.type === "usage" && event.finishReason)).toBe(false);
+
+    globalThis.fetch = (async () =>
+      textResponse(await fixtureText("../fixtures/openai/truncated.sse"), "text/event-stream")) as typeof fetch;
+    const provider = openAICompatible({ name: "custom", model: "gpt-test", baseURL: "https://example.com/v1" });
+    await expect(completeFromStream(provider, { messages: [] })).rejects.toThrow("stream ended unexpectedly");
+  });
+
+  it("reports an in-stream error chunk with its message", async () => {
+    const events = await streamFixture("../fixtures/openai/stream-error.sse");
+
+    expect(events.at(-1)).toMatchObject({
+      type: "issue",
+      issue: { kind: "provider_error", message: "custom stream error: Upstream provider overloaded", retryable: true },
+    });
+  });
+
+  it("treats [DONE] without a finish reason as a normal stop", async () => {
+    const events = await streamFixture("../fixtures/openai/done-without-finish.sse");
+
+    expect(events.some((event) => event.type === "issue")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "usage", finishReason: "stop" });
+  });
+
+  it("keeps max_tokens when a later chunk has a null finish reason", async () => {
+    const events = await streamFixture("../fixtures/openai/length-then-usage.sse");
+
+    expect(events.at(-1)).toMatchObject({ type: "usage", finishReason: "max_tokens", usage: { input: 3, output: 4 } });
+  });
+
+  it("treats a new tool call id on a reused index as a separate tool call", async () => {
+    const events = await streamFixture("../fixtures/openai/same-index-parallel-tools.sse");
+
+    expect(events.some((event) => event.type === "issue")).toBe(false);
+    expect(events.flatMap((event) => event.type === "block_end" && event.block.type === "tool_call" ? [event.block] : [])).toEqual([
+      { type: "tool_call", id: "call_1", name: "search", args: { q: "a" } },
+      { type: "tool_call", id: "call_2", name: "lookup", args: { id: 2 } },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "usage", finishReason: "tool_use" });
   });
 });

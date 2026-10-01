@@ -1,0 +1,2 @@
+{"message":{"role":"assistant","content":"he"},"done":false}
+{"message":{"role":"assistant","content":"llo"},"done":true,"done_reason":"length","prompt_eval_count":1,"eval_count":2}

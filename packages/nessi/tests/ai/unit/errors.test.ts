@@ -13,7 +13,14 @@ describe("isContextOverflow", () => {
     expect(overflow(400, "token limit reached")).toBe(true);
     expect(overflow(400, "prompt is too long")).toBe(true);
     expect(overflow(400, "reduce the length of the input")).toBe(true);
-    expect(overflow(400, "limit exceeded")).toBe(true);
+  });
+
+  it("detects provider-specific overflow messages", () => {
+    expect(overflow(400, "prompt is too long: 210000 tokens > 200000 maximum")).toBe(true);
+    expect(overflow(400, "The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).")).toBe(true);
+    expect(overflow(400, "Prompt contains 140000 tokens and 0 draft tokens, too large for model with 131072 maximum context length")).toBe(true);
+    expect(overflow(400, "the request exceeds the available context size, try increasing it")).toBe(true);
+    expect(overflow(400, "Invalid request (code: context_length_exceeded)")).toBe(true);
   });
 
   it("detects on status 413 and 422", () => {
@@ -30,6 +37,10 @@ describe("isContextOverflow", () => {
   it("rejects unrelated 400 errors", () => {
     expect(overflow(400, "invalid api key")).toBe(false);
     expect(overflow(400, "model not found")).toBe(false);
+    expect(overflow(400, "max_tokens: 100000 > 64000, which is the maximum allowed number of output tokens for claude-sonnet")).toBe(false);
+    expect(overflow(400, "Invalid 'tools[0].function.description': string too long. Expected a string with maximum length 1024")).toBe(false);
+    expect(overflow(400, "temperature: input should be less than or equal to the maximum of 2")).toBe(false);
+    expect(overflow(400, "monthly limit exceeded")).toBe(false);
   });
 });
 
@@ -48,6 +59,11 @@ describe("parseOverflowRatio", () => {
     const ratio = parseOverflowRatio(msg);
     expect(ratio).toBeDefined();
     expect(ratio!).toBeCloseTo(5120 / 4096, 2);
+  });
+
+  it("parses Anthropic-style error message", () => {
+    const ratio = parseOverflowRatio("prompt is too long: 210,000 tokens > 200000 maximum");
+    expect(ratio).toBeCloseTo(210000 / 200000, 4);
   });
 
   it("returns undefined for non-overflow messages", () => {

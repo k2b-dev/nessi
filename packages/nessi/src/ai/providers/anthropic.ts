@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "../shared/errors.js";
+import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -61,7 +61,11 @@ type AnthropicStreamEvent = {
     partial_json?: string;
     stop_reason?: string | null;
   };
+  error?: { type?: string; message?: string };
 };
+
+// Mid-stream error types worth retrying; see https://docs.anthropic.com/en/api/errors
+const RETRYABLE_STREAM_ERRORS = new Set(["overloaded_error", "rate_limit_error", "api_error", "timeout_error"]);
 
 export type AnthropicOptions = {
   apiKey?: string;
@@ -290,11 +294,23 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       let latestFinishReason: GenerateResult["finishReason"] | undefined;
       let syntheticIndex = 0;
       let sawToolCall = false;
+      let sawMessageStop = false;
 
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
         const payload = safeJsonParse<AnthropicStreamEvent>(event.data);
         if (!payload) continue;
+
+        if (event.event === "error") {
+          const type = payload.error?.type ?? "unknown_error";
+          yield {
+            type: "error",
+            error: `anthropic stream error (${type}): ${payload.error?.message ?? "unknown error"}`,
+            retryable: RETRYABLE_STREAM_ERRORS.has(type),
+          };
+          return;
+        }
+        if (event.event === "message_stop") sawMessageStop = true;
 
         if (event.event === "message_start" && payload.message?.usage) {
           latestUsage = mergeUsage(latestUsage, payload.message.usage, options);
@@ -359,6 +375,11 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "message_delta" && payload.delta?.stop_reason) {
           latestFinishReason = mapFinishReason(payload.delta.stop_reason, sawToolCall || toolBuffers.size > 0);
         }
+      }
+
+      if (!latestFinishReason && !sawMessageStop) {
+        yield streamEndedError("anthropic");
+        return;
       }
 
       if (latestUsage.total > 0 || latestFinishReason) {

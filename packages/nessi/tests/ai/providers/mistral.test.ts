@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { mistral } from "../../../src/ai/index.js";
-import { fixtureJson, jsonResponse } from "../helpers/fixtures.js";
+import { fixtureJson, fixtureText, jsonResponse, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -53,5 +53,27 @@ describe("mistral provider", () => {
         strict: true,
       },
     });
+  });
+  const streamFixture = async (fixture: string) => {
+    globalThis.fetch = (async () => textResponse(await fixtureText(fixture), "text/event-stream")) as typeof fetch;
+    const events = [];
+    for await (const event of mistral("magistral-medium-latest").stream({ messages: [] })) events.push(event);
+    return events;
+  };
+
+  it("maps Magistral content chunks to thinking and text blocks", async () => {
+    const events = await streamFixture("../fixtures/mistral/magistral-stream.sse");
+
+    expect(events.flatMap((event) => event.type === "block_end" ? [event.block] : [])).toEqual([
+      { type: "thinking", thinking: "let me think" },
+      { type: "text", text: "answer" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "usage", finishReason: "stop" });
+  });
+
+  it("reports a stream that ends without finish reason or [DONE] as a provider error", async () => {
+    const events = await streamFixture("../fixtures/mistral/truncated.sse");
+
+    expect(events.at(-1)).toMatchObject({ type: "issue", issue: { kind: "provider_error", retryable: true } });
   });
 });

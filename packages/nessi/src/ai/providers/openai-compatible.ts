@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "../shared/errors.js";
+import { formatConnectionError, isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -37,6 +37,8 @@ type OAIToolCall = {
 
 type SSEChunk = {
   id?: string;
+  /** Some gateways (e.g. OpenRouter) report failures after the response started as an error chunk. */
+  error?: { message?: string; code?: number | string };
   choices?: Array<{
     index: number;
     delta: {
@@ -333,17 +335,20 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         return;
       }
 
-      const toolBuffers = new Map<number, { callId: string; name: string; argsBuffer: string; started: boolean }>();
+      type ToolBuffer = { callId: string; name: string; argsBuffer: string; started: boolean };
+      const toolBuffers = new Map<number, ToolBuffer>();
+      const pendingToolCalls: ToolBuffer[] = [];
       let latestUsage: Usage | undefined;
       let latestFinishReason: AssistantStopReason | undefined;
-      const startToolCall = function* (buffer: { callId: string; name: string; argsBuffer: string; started: boolean }) {
+      let sawDone = false;
+      const startToolCall = function* (buffer: ToolBuffer) {
         if (buffer.started || !buffer.name.trim()) return;
         buffer.started = true;
         yield { type: "tool_start" as const, callId: buffer.callId, name: buffer.name };
         if (buffer.argsBuffer) yield { type: "tool_delta" as const, callId: buffer.callId, argsDelta: buffer.argsBuffer };
       };
       const flushToolCalls = function* (): Generator<RawStreamEvent> {
-        for (const [, buffer] of toolBuffers) {
+        for (const buffer of pendingToolCalls) {
           yield* startToolCall(buffer);
           yield {
             type: "tool_call",
@@ -353,12 +358,25 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           };
         }
         toolBuffers.clear();
+        pendingToolCalls.length = 0;
       };
 
       for await (const event of result.events) {
-        if (event.data === "[DONE]") break;
+        if (event.data === "[DONE]") {
+          sawDone = true;
+          break;
+        }
         const chunk = safeJsonParse<SSEChunk>(event.data);
         if (!chunk) continue;
+        if (chunk.error) {
+          const code = chunk.error.code;
+          yield {
+            type: "error",
+            error: `${config.name} stream error: ${chunk.error.message ?? "unknown error"}`,
+            retryable: typeof code === "number" ? isRetryableStatus(code) : true,
+          };
+          return;
+        }
 
         const choice = chunk.choices?.[0];
         const usage = usageFromChunk(chunk, config);
@@ -377,7 +395,9 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
 
         if (delta.tool_calls) {
           for (const toolCall of delta.tool_calls) {
-            const existing = toolBuffers.get(toolCall.index);
+            const current = toolBuffers.get(toolCall.index);
+            // Some servers reuse one index for parallel calls; a new id starts a new call.
+            const existing = current && (!toolCall.id || toolCall.id === current.callId) ? current : undefined;
             if (!existing) {
               const callId = toolCall.id ?? `${config.name}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
@@ -389,6 +409,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
                 started: false,
               };
               toolBuffers.set(toolCall.index, buffer);
+              pendingToolCalls.push(buffer);
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
@@ -406,25 +427,28 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         if (choice.finish_reason === "tool_calls") {
           yield* flushToolCalls();
         }
-        latestFinishReason = mapFinishReason(choice.finish_reason, false);
+        if (choice.finish_reason) latestFinishReason = mapFinishReason(choice.finish_reason, false);
         if (usage) {
           latestUsage = usage;
           yield { type: "usage", usage };
         }
       }
 
-      if (toolBuffers.size > 0) {
+      if (!latestFinishReason && !sawDone) {
+        yield streamEndedError(config.name);
+        return;
+      }
+
+      if (pendingToolCalls.length > 0) {
         latestFinishReason = "tool_use";
         yield* flushToolCalls();
       }
 
-      if (latestFinishReason) {
-        yield {
-          type: "usage",
-          usage: latestUsage ?? makeUsage(),
-          finishReason: latestFinishReason,
-        };
-      }
+      yield {
+        type: "usage",
+        usage: latestUsage ?? makeUsage(),
+        finishReason: latestFinishReason ?? "stop",
+      };
       };
       return normalizeProviderStream(raw(), { suppressTextAfterMalformedTool: true });
     },

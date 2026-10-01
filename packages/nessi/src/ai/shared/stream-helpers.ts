@@ -58,8 +58,11 @@ export const openSSEStream = async (
     // Heuristic: if the request body is large relative to the context window,
     // a network error likely means the server rejected it for context overflow
     // (browsers hide the actual HTTP 400 body behind CORS on error responses).
+    // Browsers surface that as a TypeError; aborts never count.
     const estimatedTokens = serializedBody.length / 4;
-    const isLikelyOverflow = typeof contextWindow === "number"
+    const isLikelyOverflow = !controller.signal.aborted
+      && error instanceof TypeError
+      && typeof contextWindow === "number"
       && contextWindow > 0
       && estimatedTokens > contextWindow * 0.85;
     if (isLikelyOverflow) {

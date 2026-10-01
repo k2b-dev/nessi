@@ -1,0 +1,4 @@
+data: {"choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}
+
+data: [DONE]
+

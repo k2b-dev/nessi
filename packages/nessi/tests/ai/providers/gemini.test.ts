@@ -61,4 +61,66 @@ describe("gemini provider", () => {
     expect(capturedBody.generationConfig.responseJsonSchema).toEqual(schema);
     expect(capturedBody.generationConfig.responseSchema).toBeUndefined();
   });
+  it("wraps non-object tool results and groups parallel responses into one content", async () => {
+    let capturedBody: any;
+    globalThis.fetch = (async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body ?? "{}"));
+      return jsonResponse(await fixtureJson("../fixtures/gemini/complete.json"));
+    }) as typeof fetch;
+
+    await gemini("gemini-2.0-flash", { apiKey: "x" }).complete({
+      messages: [
+        { role: "user", content: ["hi"] },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_call", id: "a", name: "search", args: {} },
+            { type: "tool_call", id: "b", name: "lookup", args: {} },
+            { type: "tool_call", id: "c", name: "fetch", args: {} },
+          ],
+        },
+        { role: "tool_result", callId: "a", name: "search", result: "the answer is 42" },
+        { role: "tool_result", callId: "b", name: "lookup", result: { ok: true } },
+        { role: "tool_result", callId: "c", name: "fetch", result: "not found", isError: true },
+        { role: "user", content: ["thanks"] },
+      ],
+    });
+
+    expect(capturedBody.contents.slice(2)).toEqual([
+      {
+        role: "user",
+        parts: [
+          { functionResponse: { name: "search", response: { output: "the answer is 42" } } },
+          { functionResponse: { name: "lookup", response: { ok: true } } },
+          { functionResponse: { name: "fetch", response: { error: "not found" } } },
+        ],
+      },
+      { role: "user", parts: [{ text: "thanks" }] },
+    ]);
+  });
+
+  it("keeps streamed text in one block and reports usage with thinking tokens once", async () => {
+    globalThis.fetch = (async () =>
+      textResponse(await fixtureText("../fixtures/gemini/multi-chunk.sse"), "text/event-stream")) as typeof fetch;
+
+    const events = [];
+    for await (const event of gemini("gemini-2.5-flash", { apiKey: "x" }).stream({ messages: [] })) events.push(event);
+
+    expect(events.filter((event) => event.type === "block_end")).toEqual([
+      { type: "block_end", blockId: "block-0", index: 0, block: { type: "text", text: "Hello" } },
+    ]);
+    expect(events.filter((event) => event.type === "usage")).toEqual([
+      { type: "usage", usage: { input: 5, output: 12, total: 17, creditsUsed: 0 }, finishReason: "stop" },
+    ]);
+  });
+
+  it("reports a stream without finish reason as a provider error", async () => {
+    globalThis.fetch = (async () =>
+      textResponse(await fixtureText("../fixtures/gemini/truncated.sse"), "text/event-stream")) as typeof fetch;
+
+    const events = [];
+    for await (const event of gemini("gemini-2.5-flash", { apiKey: "x" }).stream({ messages: [] })) events.push(event);
+
+    expect(events.at(-1)).toMatchObject({ type: "issue", issue: { kind: "provider_error", retryable: true } });
+  });
 });

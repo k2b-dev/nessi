@@ -11,5 +11,8 @@ event: content_block_delta
 data: {"index":1,"delta":{"type":"text_delta","text":"done"}}
 
 event: message_delta
-data: {"usage":{"input_tokens":1,"output_tokens":2}}
+data: {"usage":{"input_tokens":1,"output_tokens":2},"delta":{"stop_reason":"tool_use"}}
+
+event: message_stop
+data: {"type":"message_stop"}
 

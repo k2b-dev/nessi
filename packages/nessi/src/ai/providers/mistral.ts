@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "../shared/errors.js";
+import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -30,11 +30,20 @@ type MistralMessage = {
   name?: string;
 };
 
+// Reasoning models (Magistral) return content as typed chunks instead of a string.
+type MistralContent =
+  | string
+  | null
+  | Array<
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: Array<{ type: "text"; text: string }> }
+  >;
+
 type MistralChunk = {
   choices?: Array<{
     index: number;
     delta: {
-      content?: string | null;
+      content?: MistralContent;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -42,7 +51,7 @@ type MistralChunk = {
       }>;
     };
     message?: {
-      content?: string | null;
+      content?: MistralContent;
       tool_calls?: Array<{
         id?: string;
         function?: { name?: string; arguments?: string };
@@ -63,6 +72,17 @@ const usageFromChunk = (chunk: MistralChunk, options?: MistralOptions): Usage | 
     options?.creditsPerInputToken,
     options?.creditsPerOutputToken,
   );
+};
+
+const splitContent = (content: MistralContent | undefined) => {
+  if (typeof content === "string") return { text: content, thinking: "" };
+  let text = "";
+  let thinking = "";
+  for (const chunk of content ?? []) {
+    if (chunk.type === "text") text += chunk.text;
+    else if (chunk.type === "thinking") thinking += chunk.thinking.map((part) => part.text ?? "").join("");
+  }
+  return { text, thinking };
 };
 
 const convertMessages = (messages: Message[], systemPrompt: string | undefined, options?: MistralOptions) => {
@@ -173,7 +193,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       streaming: true,
       tools: true,
       images: true,
-      thinking: false,
+      thinking: true,
       usage: true,
       structuredOutput: true,
     },
@@ -221,9 +241,10 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       }));
       const usage = usageFromChunk(payload, options);
       const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
+      const { text, thinking } = splitContent(choice?.message?.content);
 
       return {
-        message: buildAssistantMessage(model, choice?.message?.content ?? "", "", toolCalls, usage, finishReason),
+        message: buildAssistantMessage(model, text, thinking, toolCalls, usage, finishReason),
         usage,
         finishReason,
         providerMeta: { model },
@@ -264,17 +285,20 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
         return;
       }
 
-      const buffers = new Map<number, { callId: string; name: string; argsBuffer: string; started: boolean }>();
+      type ToolBuffer = { callId: string; name: string; argsBuffer: string; started: boolean };
+      const buffers = new Map<number, ToolBuffer>();
+      const pendingToolCalls: ToolBuffer[] = [];
       let latestUsage: Usage | undefined;
       let latestFinishReason: GenerateResult["finishReason"] | undefined;
-      const startToolCall = function* (buffer: { callId: string; name: string; argsBuffer: string; started: boolean }) {
+      let sawDone = false;
+      const startToolCall = function* (buffer: ToolBuffer) {
         if (buffer.started || !buffer.name.trim()) return;
         buffer.started = true;
         yield { type: "tool_start" as const, callId: buffer.callId, name: buffer.name };
         if (buffer.argsBuffer) yield { type: "tool_delta" as const, callId: buffer.callId, argsDelta: buffer.argsBuffer };
       };
       const flush = function* (): Generator<RawStreamEvent> {
-        for (const [, buffer] of buffers) {
+        for (const buffer of pendingToolCalls) {
           yield* startToolCall(buffer);
           yield {
             type: "tool_call" as const,
@@ -284,10 +308,14 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           };
         }
         buffers.clear();
+        pendingToolCalls.length = 0;
       };
 
       for await (const event of result.events) {
-        if (event.data === "[DONE]") break;
+        if (event.data === "[DONE]") {
+          sawDone = true;
+          break;
+        }
         const chunk = safeJsonParse<MistralChunk>(event.data);
         if (!chunk) continue;
         const choice = chunk.choices?.[0];
@@ -299,10 +327,23 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           }
           continue;
         }
-        if (choice.delta.content) yield { type: "text", delta: choice.delta.content };
+        if (typeof choice.delta.content === "string") {
+          if (choice.delta.content) yield { type: "text", delta: choice.delta.content };
+        } else {
+          for (const chunk of choice.delta.content ?? []) {
+            if (chunk.type === "text") yield { type: "text", delta: chunk.text };
+            else if (chunk.type === "thinking") {
+              for (const part of chunk.thinking) {
+                if (part.text) yield { type: "thinking", delta: part.text };
+              }
+            }
+          }
+        }
         if (choice.delta.tool_calls) {
           for (const toolCall of choice.delta.tool_calls) {
-            const existing = buffers.get(toolCall.index);
+            const current = buffers.get(toolCall.index);
+            // Some servers reuse one index for parallel calls; a new id starts a new call.
+            const existing = current && (!toolCall.id || toolCall.id === current.callId) ? current : undefined;
             if (!existing) {
               const callId = toolCall.id ?? `mistral-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
@@ -314,6 +355,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
                 started: false,
               };
               buffers.set(toolCall.index, buffer);
+              pendingToolCalls.push(buffer);
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
@@ -330,25 +372,28 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
         if (choice.finish_reason === "tool_calls") {
           yield* flush();
         }
-        latestFinishReason = mapFinishReason(choice.finish_reason, false);
+        if (choice.finish_reason) latestFinishReason = mapFinishReason(choice.finish_reason, false);
         if (usage) {
           latestUsage = usage;
           yield { type: "usage", usage };
         }
       }
 
-      if (buffers.size > 0) {
+      if (!latestFinishReason && !sawDone) {
+        yield streamEndedError("mistral");
+        return;
+      }
+
+      if (pendingToolCalls.length > 0) {
         latestFinishReason = "tool_use";
         yield* flush();
       }
 
-      if (latestFinishReason) {
-        yield {
-          type: "usage",
-          usage: latestUsage ?? makeUsage(),
-          finishReason: latestFinishReason,
-        };
-      }
+      yield {
+        type: "usage",
+        usage: latestUsage ?? makeUsage(),
+        finishReason: latestFinishReason ?? "stop",
+      };
       };
       return normalizeProviderStream(raw(), { suppressTextAfterMalformedTool: true });
     },

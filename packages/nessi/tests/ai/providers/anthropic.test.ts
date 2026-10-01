@@ -117,4 +117,27 @@ describe("anthropic provider", () => {
       format: { type: "json_schema", schema },
     });
   });
+  it("maps a mid-stream error event to a retryable provider error", async () => {
+    globalThis.fetch = (async () =>
+      textResponse(await fixtureText("../fixtures/anthropic/stream-error.sse"), "text/event-stream")) as typeof fetch;
+
+    const events = [];
+    for await (const event of anthropic("claude-sonnet").stream({ messages: [] })) events.push(event);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "issue",
+      issue: { kind: "provider_error", retryable: true, message: "anthropic stream error (overloaded_error): Overloaded" },
+    });
+    expect(events.some((event) => event.type === "usage")).toBe(false);
+  });
+
+  it("reports a stream that ends without stop reason or message_stop as a provider error", async () => {
+    globalThis.fetch = (async () =>
+      textResponse(await fixtureText("../fixtures/anthropic/truncated.sse"), "text/event-stream")) as typeof fetch;
+
+    const events = [];
+    for await (const event of anthropic("claude-sonnet").stream({ messages: [] })) events.push(event);
+
+    expect(events.at(-1)).toMatchObject({ type: "issue", issue: { kind: "provider_error", retryable: true } });
+  });
 });
