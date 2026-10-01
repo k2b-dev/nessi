@@ -23,7 +23,8 @@ Agent loop at the package root, provider layer under `/ai`.
 
 For audio files, `/ai` also exports `openAICompatibleTranscription()` with a
 separate `transcribe()` API. Configure the endpoint and model for Scaleway,
-OpenAI or another compatible service. See [audio transcription](packages/nessi/README.md#audio-transcription).
+OpenAI or another compatible service. For live audio, `vllmRealtimeTranscription()`
+streams text while the user speaks. See [audio transcription](packages/nessi/README.md#audio-transcription).
 
 ```ts
 import { nessi, memoryStore } from "@k2b/nessi";

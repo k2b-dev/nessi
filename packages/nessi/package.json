@@ -10,6 +10,7 @@
     ".": "./src/index.ts",
     "./ai": "./src/ai/index.ts",
     "./ai/providers/openai-compatible-transcription": "./src/ai/providers/openai-compatible-transcription.ts",
+    "./ai/providers/vllm-realtime-transcription": "./src/ai/providers/vllm-realtime-transcription.ts",
     "./ai/providers/openai-compatible": "./src/ai/providers/openai-compatible.ts",
     "./ai/providers/openai": "./src/ai/providers/openai.ts",
     "./ai/providers/openrouter": "./src/ai/providers/openrouter.ts",

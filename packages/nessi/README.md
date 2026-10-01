@@ -309,11 +309,52 @@ reason. There are no automatic retries or default timeout.
 Transcription uses its own `TranscriptionProvider` contract with `name`, `model`
 and `transcribe(request)`. Custom adapters can implement that interface for other
 protocols. It is separate from the chat provider passed to `nessi()`; pass the
-resulting text into the agent when needed. Streaming transcription, timestamps
-and speaker identification are not exposed.
+resulting text into the agent when needed. Timestamps and speaker
+identification are not exposed; for live audio see below.
 
 The example follows [Scaleway's audio API documentation](https://www.scaleway.com/en/docs/generative-apis/how-to/query-audio-models/).
 Keep API keys on the server when integrating a browser application.
+
+### Live transcription
+
+`vllmRealtimeTranscription()` transcribes audio while it is still being recorded.
+It streams audio to vLLM's `/v1/realtime` WebSocket and yields text as the model
+recognizes it, for example with `mistralai/Voxtral-Mini-4B-Realtime-2602`:
+
+```ts
+import { vllmRealtimeTranscription } from "@k2b/nessi/ai";
+
+const speech = vllmRealtimeTranscription("voxtral-realtime", {
+  baseURL: "https://vllm.example.com/v1",
+  apiKey: process.env.VLLM_API_KEY,
+});
+
+let text = "";
+for await (const event of speech.stream({ audio: microphoneChunks, signal })) {
+  if (event.type === "delta") text += event.text;
+  if (event.type === "done") console.log(event.text, event.audioMs, event.usage);
+}
+```
+
+`audio` is an async iterable of mono 16-bit little-endian PCM chunks
+(`Int16Array` or `Uint8Array`) at 16 kHz (`speech.sampleRate`). Send chunks as
+they are recorded; the transcript is finished when the iterable ends.
+`delta` events carry new text to append, and the final `done` event carries the
+complete transcript, the duration of the sent audio and token usage. Nessi does
+not resample audio. In a browser, an `AudioContext` created with
+`{ sampleRate: 16000 }` records at the right rate.
+
+The adapter uses the standard global `WebSocket`, so it runs in browsers, Bun,
+Deno and Node 22 or later. Sending `apiKey` or `headers` requires a WebSocket that accepts
+headers, which Bun does and browsers do not. Pass `webSocket: (url, headers) =>
+...` to supply your own WebSocket, for example from the `ws` package. Keep API
+keys on the server and relay browser audio through it.
+
+Errors, a closed connection and a rejected handshake reject the iteration;
+cancellation through `signal` uses the signal's reason and closes the connection
+immediately. Stopping the iteration early closes it too. Nessi asks the audio
+iterable to stop, but cannot interrupt a pending read, so stop the microphone with
+the same signal. There are no automatic retries or reconnects.
 
 ## Focused provider imports
 

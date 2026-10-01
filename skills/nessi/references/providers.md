@@ -41,10 +41,44 @@ const { text } = await speech.transcribe({
   `prompt` is an optional context hint subject to model support.
 - Results contain only `{ text: string }`. Errors reject; cancellation uses the
   signal reason. There is no default timeout or automatic retry.
-- Do not promise timestamps, speaker identification, streaming, transcoding or
-  automatic file splitting. Formats, limits and optional fields depend on the service.
+- Do not promise timestamps, speaker identification, transcoding or automatic
+  file splitting. Formats, limits and optional fields depend on the service.
 - For other protocols, implement the exported `TranscriptionProvider` interface.
   Pass transcript text into the agent; do not pass this provider to `nessi()`.
+
+## Live transcription
+
+Use `vllmRealtimeTranscription(model, options)` from `@k2b/nessi/ai` when text
+should appear while the user speaks. It talks to vLLM's `/v1/realtime`
+WebSocket, for example with `mistralai/Voxtral-Mini-4B-Realtime-2602`.
+
+```ts
+import { vllmRealtimeTranscription } from "@k2b/nessi/ai";
+
+const speech = vllmRealtimeTranscription("voxtral-realtime", {
+  baseURL: "https://vllm.example.com/v1",
+  apiKey: process.env.VLLM_API_KEY,
+});
+
+for await (const event of speech.stream({ audio: pcm16Chunks, signal })) {
+  if (event.type === "delta") appendToDraft(event.text);
+  if (event.type === "done") saveTranscript(event.text, event.audioMs);
+}
+```
+
+- `audio` is an async iterable of mono PCM16 little-endian chunks
+  (`Int16Array` or `Uint8Array`) at 16 kHz (`speech.sampleRate`).
+  Nessi does not resample; a browser `AudioContext({ sampleRate: 16000 })` does.
+- The transcript ends when the audio iterable ends. `delta` carries new text,
+  `done` the full text, `audioMs` and token `usage`.
+- The default is the global `WebSocket`. `apiKey`/`headers` need a runtime whose
+  WebSocket accepts headers (Bun). Otherwise pass `webSocket: (url, headers) => ...`.
+  Keep keys on the server and relay browser audio through it.
+- Errors, early close and rejected handshakes reject; `signal` cancels with its
+  reason and closes the connection at once; breaking out of the loop closes it
+  too. Stop the microphone with the same signal. No retries.
+- A cleanup or correction pass over the final text is application logic: run it
+  with `complete()` or `nessi.structured()` on a chat provider.
 
 ## Structured output support
 

@@ -12,6 +12,7 @@ const sourcePackage = JSON.parse(
 
 const providerExports = [
   "openai-compatible-transcription",
+  "vllm-realtime-transcription",
   "openai-compatible",
   "openai",
   "openrouter",

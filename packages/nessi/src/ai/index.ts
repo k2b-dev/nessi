@@ -1,7 +1,18 @@
 export { completeFromStream } from "./complete-from-stream.js";
 export { openAICompatibleTranscription } from "./providers/openai-compatible-transcription.js";
 export type { OpenAICompatibleTranscriptionOptions } from "./providers/openai-compatible-transcription.js";
-export type { TranscriptionProvider, TranscriptionRequest, TranscriptionResult } from "./transcription.js";
+export { vllmRealtimeTranscription } from "./providers/vllm-realtime-transcription.js";
+export type { VllmRealtimeTranscriptionOptions } from "./providers/vllm-realtime-transcription.js";
+export type {
+  RealtimeTranscriptionEvent,
+  RealtimeTranscriptionProvider,
+  RealtimeTranscriptionRequest,
+  RealtimeWebSocket,
+  RealtimeWebSocketFactory,
+  TranscriptionProvider,
+  TranscriptionRequest,
+  TranscriptionResult,
+} from "./transcription.js";
 export { openAICompatible } from "./providers/openai-compatible.js";
 export { openai } from "./providers/openai.js";
 export { openrouter } from "./providers/openrouter.js";
