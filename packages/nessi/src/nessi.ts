@@ -460,9 +460,10 @@ const coalesceOutboundEvents = async function* (
       }
     }
   } finally {
-    // Close the source when the consumer stops early. A source request is usually still in
-    // flight, so don't block the consumer on it.
-    if (!sourceDone) void Promise.resolve(iterator.return?.()).catch(() => {});
+    // Close the source when the consumer stops early. The loop is aborted first, so a source
+    // request still in flight settles promptly; awaiting it keeps any history write it makes
+    // (e.g. the interrupted assistant message) ahead of whatever the consumer does next.
+    if (!sourceDone) await Promise.resolve(iterator.return?.()).catch(() => {});
   }
 }
 

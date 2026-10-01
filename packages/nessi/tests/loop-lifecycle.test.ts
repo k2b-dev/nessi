@@ -111,6 +111,31 @@ describe("nessi loop lifecycle", () => {
     expect(closed).toBe(true);
   });
 
+  it("persists the interrupted turn before a coalesced consumer's early exit completes", async () => {
+    const store = memoryStore();
+    const provider: Provider = {
+      ...mockProvider([]),
+      async *stream(request) {
+        yield { type: "block_start", blockId: "b1", kind: "text", index: 0 };
+        for (let i = 0; i < 100; i++) {
+          if (request.signal?.aborted) throw new Error("aborted");
+          yield { type: "block_delta", blockId: "b1", kind: "text", delta: "x" };
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+      },
+    };
+
+    const loop = nessi({ provider, store, systemPrompt: "sys", input: "go", coalesce: { ms: 5 } });
+    for await (const event of loop) {
+      if (event.type === "block_delta") break;
+    }
+    await store.append({ role: "user", content: [{ type: "text", text: "next" }] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const roles = (await store.load()).map((entry) => entry.message.role);
+    expect(roles.at(-1)).toBe("user");
+  });
+
   it("aborts running tools when the consumer stops iterating", async () => {
     let toolSignal: AbortSignal | undefined;
     const waiting = defineTool({

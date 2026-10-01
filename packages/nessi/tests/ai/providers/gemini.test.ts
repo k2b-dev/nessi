@@ -123,4 +123,18 @@ describe("gemini provider", () => {
 
     expect(events.at(-1)).toMatchObject({ type: "issue", issue: { kind: "provider_error", retryable: true } });
   });
+
+  it("reports a blocked prompt as a non-retryable error and keeps its usage", async () => {
+    globalThis.fetch = (async () =>
+      textResponse(await fixtureText("../fixtures/gemini/blocked.sse"), "text/event-stream")) as typeof fetch;
+
+    const events = [];
+    for await (const event of gemini("gemini-2.5-flash", { apiKey: "x" }).stream({ messages: [] })) events.push(event);
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "usage", usage: expect.objectContaining({ input: 7 }) }));
+    expect(events.at(-1)).toMatchObject({
+      type: "issue",
+      issue: { kind: "provider_error", message: "gemini blocked the prompt (SAFETY).", retryable: false },
+    });
+  });
 });

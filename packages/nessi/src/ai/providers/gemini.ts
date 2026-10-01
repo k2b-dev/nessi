@@ -29,6 +29,7 @@ type GeminiContent = {
 };
 
 type GeminiResponse = {
+  promptFeedback?: { blockReason?: string };
   candidates?: Array<{
     content?: GeminiContent;
     finishReason?: string;
@@ -234,6 +235,14 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
         if (event.data === "[DONE]") break;
         const payload = safeJsonParse<GeminiResponse>(event.data);
         if (!payload) continue;
+        if (payload.usageMetadata) latestUsage = usageFromResponse(payload, options);
+        // A blocked prompt has no candidates and therefore no finish reason; it is not a truncated stream.
+        const blockReason = payload.promptFeedback?.blockReason;
+        if (blockReason) {
+          if (latestUsage) yield { type: "usage", usage: latestUsage };
+          yield { type: "error", error: `gemini blocked the prompt (${blockReason}).`, retryable: false };
+          return;
+        }
         const candidate = payload.candidates?.[0];
         const parts = candidate?.content?.parts ?? [];
         if (candidate?.finishReason) rawFinishReason = candidate.finishReason;
@@ -250,8 +259,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
             };
           }
         }
-        // usageMetadata is cumulative; report it once at the end so text blocks stay intact.
-        if (payload.usageMetadata) latestUsage = usageFromResponse(payload, options);
+        // usageMetadata is cumulative; it is reported once at the end so text blocks stay intact.
       }
       if (!rawFinishReason) {
         yield streamEndedError("gemini");
