@@ -83,9 +83,9 @@ packages/
   nessi-ui/    Browser UI, settings, local persistence, Docker setup
 ```
 
-## Skills
+## Skill
 
-This repo also ships standalone AI coding skills (e.g. structured workflows, prompting strategies) that work with any Claude Code project.
+This repo also ships a `nessi` skill that teaches coding agents how to build with `@k2b/nessi`.
 
 ```bash
 bunx skills add https://github.com/k2b-dev/nessi

@@ -17,3 +17,8 @@ coverage/
 
 .idea/
 .vscode/
+
+# Local skill installs (bunx skills add)
+.agents/
+.claude/skills/
+skills-lock.json
