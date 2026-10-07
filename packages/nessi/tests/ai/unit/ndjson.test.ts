@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import type { ByteStreamReader } from "../../../src/ai/shared/sse.js";
 import { parseNDJSON } from "../../../src/ai/shared/ndjson.js";
 
-function readerFromChunks(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function readerFromChunks(chunks: string[]): ByteStreamReader {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {

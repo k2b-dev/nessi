@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { mistral } from "../../../src/ai/index.js";
-import { fixtureJson, fixtureText, jsonResponse, textResponse } from "../helpers/fixtures.js";
+import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -10,7 +10,7 @@ afterEach(() => {
 
 describe("mistral provider", () => {
   it("supports complete through the mistral preset", async () => {
-    globalThis.fetch = (async () => jsonResponse(await fixtureJson("../fixtures/mistral/complete.json"))) as typeof fetch;
+    stubFetch(async () => jsonResponse(await fixtureJson("../fixtures/mistral/complete.json")));
 
     const provider = mistral("mistral-small-latest");
     const result = await provider.complete({ messages: [] });
@@ -20,10 +20,10 @@ describe("mistral provider", () => {
 
   it("sends temperature 0 explicitly", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/mistral/complete.json"));
-    }) as typeof fetch;
+    });
 
     const provider = mistral("mistral-small-latest", { temperature: 0.8 });
     await provider.complete({ messages: [], temperature: 0 });
@@ -33,10 +33,10 @@ describe("mistral provider", () => {
 
   it("maps responseFormat to json_schema response_format", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/mistral/complete.json"));
-    }) as typeof fetch;
+    });
 
     const schema = { type: "object", properties: { title: { type: "string" } }, required: ["title"] };
     const provider = mistral("mistral-small-latest");
@@ -55,7 +55,7 @@ describe("mistral provider", () => {
     });
   });
   const streamFixture = async (fixture: string) => {
-    globalThis.fetch = (async () => textResponse(await fixtureText(fixture), "text/event-stream")) as typeof fetch;
+    stubFetch(async () => textResponse(await fixtureText(fixture), "text/event-stream"));
     const events = [];
     for await (const event of mistral("magistral-medium-latest").stream({ messages: [] })) events.push(event);
     return events;

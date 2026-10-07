@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import type { ByteStreamReader } from "../../../src/ai/shared/sse.js";
 import { parseSSE } from "../../../src/ai/shared/sse.js";
 
-function readerFromChunks(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function readerFromChunks(chunks: string[]): ByteStreamReader {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -37,9 +38,9 @@ describe("parseSSE", () => {
   });
 
   it("throws a structured first-byte timeout", async () => {
-    const reader = {
+    const reader: ByteStreamReader = {
       read: () => new Promise<never>(() => {}),
-    } as ReadableStreamDefaultReader<Uint8Array>;
+    };
 
     let error: unknown;
     try {

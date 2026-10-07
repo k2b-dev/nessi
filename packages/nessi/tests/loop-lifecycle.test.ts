@@ -12,7 +12,7 @@ const collect = async (loop: ReturnType<typeof nessi>) => {
   return events;
 };
 
-const toolCallTurn = (name: string, args: unknown = {}) => [
+const toolCallTurn = (name: string, args: Record<string, unknown> = {}): Parameters<typeof mockProvider>[0] => [
   { type: "tool_start" as const, callId: "c1", name },
   { type: "tool_call" as const, callId: "c1", name, args },
   { type: "usage" as const, usage: { input: 1, output: 1, total: 2 }, finishReason: "tool_use" as const },

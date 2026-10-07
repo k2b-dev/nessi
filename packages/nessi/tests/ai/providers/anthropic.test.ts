@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { anthropic } from "../../../src/ai/index.js";
-import { fixtureJson, fixtureText, jsonResponse, textResponse } from "../helpers/fixtures.js";
+import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -11,7 +11,7 @@ afterEach(() => {
 describe("anthropic provider", () => {
   it("batches consecutive tool results into a single user message and preserves temperature 0", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse({
         id: "msg_123",
@@ -19,7 +19,7 @@ describe("anthropic provider", () => {
         stop_reason: "end_turn",
         usage: { input_tokens: 1, output_tokens: 1 },
       });
-    }) as typeof fetch;
+    });
 
     const provider = anthropic("claude-sonnet", { temperature: 0.7 });
     await provider.complete({
@@ -48,7 +48,7 @@ describe("anthropic provider", () => {
   });
 
   it("maps complete tool_use blocks", async () => {
-    globalThis.fetch = (async () => jsonResponse(await fixtureJson("../fixtures/anthropic/complete.json"))) as typeof fetch;
+    stubFetch(async () => jsonResponse(await fixtureJson("../fixtures/anthropic/complete.json")));
 
     const provider = anthropic("claude-sonnet");
     const result = await provider.complete({ messages: [] });
@@ -57,8 +57,8 @@ describe("anthropic provider", () => {
   });
 
   it("streams text and tool input deltas", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/anthropic/stream.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/anthropic/stream.sse"), "text/event-stream"));
 
     const provider = anthropic("claude-sonnet");
     const events = [];
@@ -70,7 +70,7 @@ describe("anthropic provider", () => {
   });
 
   it("merges streaming usage chunks instead of overwriting prior input tokens", async () => {
-    globalThis.fetch = (async () =>
+    stubFetch(async () =>
       textResponse(
         [
           "event: message_start",
@@ -81,7 +81,7 @@ describe("anthropic provider", () => {
           "",
         ].join("\n"),
         "text/event-stream",
-      )) as typeof fetch;
+      ));
 
     const provider = anthropic("claude-sonnet");
     const events = [];
@@ -96,7 +96,7 @@ describe("anthropic provider", () => {
 
   it("maps responseFormat to output_config json_schema", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse({
         id: "msg_123",
@@ -104,7 +104,7 @@ describe("anthropic provider", () => {
         stop_reason: "end_turn",
         usage: { input_tokens: 1, output_tokens: 1 },
       });
-    }) as typeof fetch;
+    });
 
     const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
     const provider = anthropic("claude-sonnet");
@@ -118,8 +118,8 @@ describe("anthropic provider", () => {
     });
   });
   it("maps a mid-stream error event to a retryable provider error", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/anthropic/stream-error.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/anthropic/stream-error.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of anthropic("claude-sonnet").stream({ messages: [] })) events.push(event);
@@ -132,8 +132,8 @@ describe("anthropic provider", () => {
   });
 
   it("reports a stream that ends without stop reason or message_stop as a provider error", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/anthropic/truncated.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/anthropic/truncated.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of anthropic("claude-sonnet").stream({ messages: [] })) events.push(event);

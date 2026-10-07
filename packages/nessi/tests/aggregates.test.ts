@@ -97,7 +97,7 @@ describe("loop aggregate helpers", () => {
       toolCallCount: 0,
       toolErrorCount: 0,
       assistantMessageCount: 1,
-    } as LoopAggregate;
+    } as unknown as LoopAggregate; // persisted before the issue and totalElapsedMs fields existed
 
     const clone = cloneLoopAggregate(legacyAggregate);
 

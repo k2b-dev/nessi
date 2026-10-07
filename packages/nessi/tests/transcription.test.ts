@@ -18,7 +18,7 @@ function endpoint(handler: (request: Request) => Response | Promise<Response>) {
 describe("audio transcription", () => {
   it("uploads multipart audio, options and custom authentication over HTTP", async () => {
     let received: Request | undefined;
-    let form: FormData | undefined;
+    let form: Awaited<ReturnType<Request["formData"]>> | undefined;
     const baseURL = endpoint(async (request) => {
       received = request;
       form = await request.formData();
@@ -50,7 +50,7 @@ describe("audio transcription", () => {
   });
 
   it("preserves File names, omits optional fields and accepts empty transcripts", async () => {
-    let form: FormData | undefined;
+    let form: Awaited<ReturnType<Request["formData"]>> | undefined;
     let authorization: string | null = null;
     const provider = openAICompatibleTranscription("local-whisper", {
       baseURL: endpoint(async (request) => {
@@ -96,7 +96,7 @@ describe("audio transcription", () => {
     try {
       const path = join(directory, "recording.mp3");
       await Bun.write(path, "audio fixture");
-      let form: FormData | undefined;
+      let form: Awaited<ReturnType<Request["formData"]>> | undefined;
       const provider = openAICompatibleTranscription("whisper", {
         baseURL: endpoint(async (request) => {
           form = await request.formData();

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { completeFromStream, openAICompatible, openrouter, vllm } from "../../../src/ai/index.js";
 import { expectProviderContract } from "../contracts/provider-contract.js";
-import { fixtureJson, fixtureText, jsonResponse, textResponse } from "../helpers/fixtures.js";
+import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
 import type { OpenAICompat } from "../../../src/ai/types.js";
 
 const originalFetch = globalThis.fetch;
@@ -51,10 +51,10 @@ describe("openAICompatible provider", () => {
         { delta: { tool_calls: [{ index: 0, id: "call_test", function: { name: "lookup", arguments: '{"q":' } }] }, finish_reason: null },
         { delta: { tool_calls: [{ index: 0, function: { arguments: '"test"}' } }] }, finish_reason: "tool_calls" },
       ];
-      globalThis.fetch = (async () => textResponse(
+      stubFetch(async () => textResponse(
         frames.map((frame) => `data: ${JSON.stringify({ choices: [{ index: 0, ...frame }] })}\n\n`).join("") + "data: [DONE]\n\n",
         "text/event-stream",
-      )) as typeof fetch;
+      ));
 
       const events = [];
       for await (const event of provider.stream({ messages: [] })) events.push(event);
@@ -67,7 +67,7 @@ describe("openAICompatible provider", () => {
           { type: "block_delta", blockId: "block-0", delta: testCase.expected },
           { type: "block_delta", blockId: "block-0", delta: testCase.expected },
           { type: "block_end", blockId: "block-0", index: 0, block: { type: "thinking", thinking: testCase.expected.repeat(2) } },
-        ] : []),
+        ] as const : []),
         { type: "block_start", blockId: `block-${textIndex}`, index: textIndex, kind: "text" },
         { type: "block_delta", blockId: `block-${textIndex}`, delta: "answer" },
         { type: "block_end", blockId: `block-${textIndex}`, index: textIndex, block: { type: "text", text: "answer" } },
@@ -84,9 +84,9 @@ describe("openAICompatible provider", () => {
     const body = new ReadableStream<Uint8Array>({ start: (controller) => source.resolve(controller) });
     const controller = await source.promise;
     const encoder = new TextEncoder();
-    globalThis.fetch = (async () => new Response(body, {
+    stubFetch(async () => new Response(body, {
       headers: { "Content-Type": "text/event-stream" },
-    })) as typeof fetch;
+    }));
     const provider = openAICompatible({ name: "synthetic", model: "test", baseURL: "https://example.com/v1" });
     const stream = provider.stream({ messages: [] })[Symbol.asyncIterator]();
 
@@ -116,11 +116,11 @@ describe("openAICompatible provider", () => {
     });
 
     let call = 0;
-    globalThis.fetch = (async () => {
+    stubFetch(async () => {
       call++;
       if (call === 1) return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
       return textResponse(await fixtureText("../fixtures/openai/stream.sse"), "text/event-stream");
-    }) as typeof fetch;
+    });
 
     await expectProviderContract(provider, { messages: [] });
   });
@@ -138,13 +138,13 @@ describe("openAICompatible provider", () => {
     });
 
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return textResponse(await fixtureText("../fixtures/openai/strict-tool-stream.sse"), "text/event-stream");
-    }) as typeof fetch;
+    });
 
     const messages = [
-      { role: "user", content: [{ type: "text" as const, text: "find" }] },
+      { role: "user" as const, content: [{ type: "text" as const, text: "find" }] },
       {
         role: "assistant" as const,
         content: [{ type: "tool_call" as const, id: "call_abc123456789", name: "search", args: { q: "hello" } }],
@@ -172,8 +172,8 @@ describe("openAICompatible provider", () => {
       },
     });
 
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/openai/vllm-malformed-tool-text.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/openai/vllm-malformed-tool-text.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of provider.stream({ messages: [] })) events.push(event);
@@ -191,8 +191,8 @@ describe("openAICompatible provider", () => {
 
   it("maps openrouter reasoning details to thinking events", async () => {
     const provider = openrouter("openai/gpt-4.1-mini", { apiKey: "x", baseURL: "https://openrouter.ai/api/v1" });
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/openrouter/reasoning.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/openrouter/reasoning.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of provider.stream({ messages: [] })) events.push(event);
@@ -203,10 +203,10 @@ describe("openAICompatible provider", () => {
 
   it("sends temperature 0 explicitly", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
-    }) as typeof fetch;
+    });
 
     const provider = openAICompatible({
       name: "custom",
@@ -222,10 +222,10 @@ describe("openAICompatible provider", () => {
 
   it("maps responseFormat to OpenAI json_schema response_format", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
-    }) as typeof fetch;
+    });
 
     const provider = openAICompatible({
       name: "custom",
@@ -255,10 +255,10 @@ describe("openAICompatible provider", () => {
 
   it("maps vLLM responseFormat to structured_outputs", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
-    }) as typeof fetch;
+    });
 
     const provider = vllm("qwen-test", { apiKey: "x", baseURL: "https://example.com/v1" });
     const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
@@ -282,7 +282,7 @@ describe("openAICompatible provider", () => {
     expect(provider.capabilities.structuredOutput).toBe(false);
   });
   const streamFixture = async (fixture: string) => {
-    globalThis.fetch = (async () => textResponse(await fixtureText(fixture), "text/event-stream")) as typeof fetch;
+    stubFetch(async () => textResponse(await fixtureText(fixture), "text/event-stream"));
     const provider = openAICompatible({ name: "custom", model: "gpt-test", baseURL: "https://example.com/v1" });
     const events = [];
     for await (const event of provider.stream({ messages: [] })) events.push(event);
@@ -295,8 +295,8 @@ describe("openAICompatible provider", () => {
     expect(events.at(-1)).toMatchObject({ type: "issue", issue: { kind: "provider_error", retryable: true } });
     expect(events.some((event) => event.type === "usage" && event.finishReason)).toBe(false);
 
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/openai/truncated.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/openai/truncated.sse"), "text/event-stream"));
     const provider = openAICompatible({ name: "custom", model: "gpt-test", baseURL: "https://example.com/v1" });
     await expect(completeFromStream(provider, { messages: [] })).rejects.toThrow("stream ended unexpectedly");
   });

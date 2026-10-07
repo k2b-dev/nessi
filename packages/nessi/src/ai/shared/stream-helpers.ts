@@ -92,7 +92,7 @@ export const openSSEStream = async (
     return { ok: false, error: { type: "error", ...normalized } };
   }
 
-  const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const reader = response.body?.getReader();
   if (!reader) {
     cleanupExternalAbort();
     return {

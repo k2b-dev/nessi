@@ -35,7 +35,7 @@ describe("defineTool", () => {
       {
         signal: new AbortController().signal,
         requestApproval: async () => true,
-        requestClientTool: async () => undefined,
+        requestClientTool: () => Promise.reject(new Error("not used")),
       },
     );
     expect(result).toEqual({ echoed: "hello" });

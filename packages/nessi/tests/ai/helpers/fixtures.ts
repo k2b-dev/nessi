@@ -19,3 +19,12 @@ export function textResponse(body: string, contentType: string): Response {
     headers: { "Content-Type": contentType },
   });
 }
+
+type FetchHandler = (input: string | URL | Request, init?: RequestInit) => Response | Promise<Response>;
+
+/** Replace the global fetch for one test. Restore the original in `afterEach`. */
+export function stubFetch(handler: FetchHandler): void {
+  globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => handler(input, init), {
+    preconnect: () => {},
+  });
+}

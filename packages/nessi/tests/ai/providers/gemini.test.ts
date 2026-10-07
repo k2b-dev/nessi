@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { gemini } from "../../../src/ai/index.js";
-import { fixtureJson, fixtureText, jsonResponse, textResponse } from "../helpers/fixtures.js";
+import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -10,7 +10,7 @@ afterEach(() => {
 
 describe("gemini provider", () => {
   it("maps complete responses and function calls", async () => {
-    globalThis.fetch = (async () => jsonResponse(await fixtureJson("../fixtures/gemini/complete.json"))) as typeof fetch;
+    stubFetch(async () => jsonResponse(await fixtureJson("../fixtures/gemini/complete.json")));
 
     const provider = gemini("gemini-2.0-flash", { apiKey: "x" });
     const result = await provider.complete({ messages: [] });
@@ -19,8 +19,8 @@ describe("gemini provider", () => {
   });
 
   it("streams text and function calls", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/gemini/stream.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/gemini/stream.sse"), "text/event-stream"));
 
     const provider = gemini("gemini-2.0-flash", { apiKey: "x" });
     const events = [];
@@ -32,10 +32,10 @@ describe("gemini provider", () => {
 
   it("sends temperature 0 explicitly", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/gemini/complete.json"));
-    }) as typeof fetch;
+    });
 
     const provider = gemini("gemini-2.0-flash", { apiKey: "x", temperature: 0.8 });
     await provider.complete({ messages: [], temperature: 0 });
@@ -45,10 +45,10 @@ describe("gemini provider", () => {
 
   it("maps responseFormat to response schema generation config", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/gemini/complete.json"));
-    }) as typeof fetch;
+    });
 
     const schema = { type: "object", properties: { title: { type: "string" } }, required: ["title"] };
     const provider = gemini("gemini-2.0-flash", { apiKey: "x" });
@@ -63,10 +63,10 @@ describe("gemini provider", () => {
   });
   it("wraps non-object tool results and groups parallel responses into one content", async () => {
     let capturedBody: any;
-    globalThis.fetch = (async (_input, init) => {
+    stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return jsonResponse(await fixtureJson("../fixtures/gemini/complete.json"));
-    }) as typeof fetch;
+    });
 
     await gemini("gemini-2.0-flash", { apiKey: "x" }).complete({
       messages: [
@@ -100,8 +100,8 @@ describe("gemini provider", () => {
   });
 
   it("keeps streamed text in one block and reports usage with thinking tokens once", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/gemini/multi-chunk.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/gemini/multi-chunk.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of gemini("gemini-2.5-flash", { apiKey: "x" }).stream({ messages: [] })) events.push(event);
@@ -115,8 +115,8 @@ describe("gemini provider", () => {
   });
 
   it("reports a stream without finish reason as a provider error", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/gemini/truncated.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/gemini/truncated.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of gemini("gemini-2.5-flash", { apiKey: "x" }).stream({ messages: [] })) events.push(event);
@@ -125,8 +125,8 @@ describe("gemini provider", () => {
   });
 
   it("reports a blocked prompt as a non-retryable error and keeps its usage", async () => {
-    globalThis.fetch = (async () =>
-      textResponse(await fixtureText("../fixtures/gemini/blocked.sse"), "text/event-stream")) as typeof fetch;
+    stubFetch(async () =>
+      textResponse(await fixtureText("../fixtures/gemini/blocked.sse"), "text/event-stream"));
 
     const events = [];
     for await (const event of gemini("gemini-2.5-flash", { apiKey: "x" }).stream({ messages: [] })) events.push(event);

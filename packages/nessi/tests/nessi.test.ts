@@ -92,6 +92,7 @@ describe("nessi core loop", () => {
       nessi({
         provider: mockProvider([]),
         store: memoryStore(),
+        systemPrompt: "test",
         input: "Hi",
         tools: [first, second],
       }),
@@ -122,6 +123,7 @@ describe("nessi core loop", () => {
     await collectEvents(nessi({
       provider,
       store: memoryStore(),
+      systemPrompt: "test",
       input: "Start",
       tools: [tool],
     }));
@@ -184,6 +186,7 @@ describe("nessi core loop", () => {
     await collectEvents(nessi({
       provider,
       store: memoryStore(),
+      systemPrompt: "test",
       input: "Start",
       tools: async () => {
         resolverCalls++;
@@ -217,6 +220,7 @@ describe("nessi core loop", () => {
     const events = await collectEvents(nessi({
       provider: mockProvider([], { onRequest: () => { providerCalled = true; } }),
       store: memoryStore(),
+      systemPrompt: "test",
       input: "Start",
       tools: () => [first, second],
     }));
@@ -234,6 +238,7 @@ describe("nessi core loop", () => {
     const events = await collectEvents(nessi({
       provider: mockProvider([], { onRequest: () => { providerCalled = true; } }),
       store: memoryStore(),
+      systemPrompt: "test",
       input: "Start",
       tools: async () => {
         throw new Error("registry unavailable");
@@ -268,6 +273,7 @@ describe("nessi core loop", () => {
     await collectEvents(nessi({
       provider,
       store: memoryStore(),
+      systemPrompt: "test",
       input: "Start",
       tools: [tool],
     }));
@@ -289,6 +295,7 @@ describe("nessi core loop", () => {
       nessi({
         provider: mockProvider([{ type: "text", delta: "never reaches provider" }]),
         store: brokenStore,
+        systemPrompt: "test",
         input: "Hi",
       }),
     );
@@ -1972,7 +1979,7 @@ describe("nessi core loop", () => {
     const userTexts = requests[0]!.messages
       .filter((message) => message.role === "user")
       .flatMap((message) => message.content)
-      .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+      .filter((part): part is Extract<typeof part, { type: "text" }> => typeof part !== "string" && part.type === "text")
       .map((part) => part.text);
     expect(userTexts).toEqual(["Start", "First", "Second"]);
     expect(events.filter((event) => event.type === "steer_applied").map((event) => event.message)).toEqual([
@@ -2006,7 +2013,7 @@ describe("nessi core loop", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]!.messages.some(
       (message) => message.role === "user"
-        && message.content.some((part) => part.type === "text" && part.text === "Revise the answer"),
+        && message.content.some((part) => typeof part !== "string" && part.type === "text" && part.text === "Revise the answer"),
     )).toBe(true);
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
     expect(events.filter((event) => event.type === "steer_applied")).toHaveLength(1);

@@ -43,8 +43,8 @@ describe("normalizeProviderStream", () => {
 
     expect(events.map((event) => event.type)).toEqual(["issue", "usage"]);
     const issue = events.find((event) => event.type === "issue");
-    expect(issue?.type === "issue" ? issue.issue.reason : undefined).toBe("text_during_tool_call");
-    expect(issue?.type === "issue" ? issue.issue.textDelta : undefined).toBe("</invoke>");
+    expect(issue?.type === "issue" && "reason" in issue.issue ? issue.issue.reason : undefined).toBe("text_during_tool_call");
+    expect(issue?.type === "issue" && "textDelta" in issue.issue ? issue.issue.textDelta : undefined).toBe("</invoke>");
     expect(events.some((event) => event.type === "block_end" && event.block.type === "tool_call")).toBe(false);
     expect(events.some((event) => event.type === "block_end" && event.block.type === "text")).toBe(false);
   });
@@ -58,7 +58,7 @@ describe("normalizeProviderStream", () => {
 
     expect(events.map((event) => event.type)).toEqual(["issue"]);
     const issue = events.find((event) => event.type === "issue");
-    expect(issue?.type === "issue" ? issue.issue.reason : undefined).toBe("invalid_tool_arguments");
+    expect(issue?.type === "issue" && "reason" in issue.issue ? issue.issue.reason : undefined).toBe("invalid_tool_arguments");
   });
 
   it("cancels pending tool calls when the stream ends", async () => {
@@ -69,7 +69,7 @@ describe("normalizeProviderStream", () => {
 
     expect(events.map((event) => event.type)).toEqual(["issue"]);
     const cancel = events.find((event) => event.type === "issue");
-    expect(cancel?.type === "issue" ? cancel.issue.reason : undefined).toBe("stream_ended_before_tool_call");
+    expect(cancel?.type === "issue" && "reason" in cancel.issue ? cancel.issue.reason : undefined).toBe("stream_ended_before_tool_call");
     expect(cancel?.type === "issue" ? cancel.issue.kind : undefined).toBe("cancelled_tool_call");
   });
 
@@ -94,7 +94,7 @@ describe("normalizeProviderStream", () => {
 
     expect(events.map((event) => event.type)).toEqual(["issue", "issue"]);
     const cancel = events[0];
-    expect(cancel?.type === "issue" ? cancel.issue.reason : undefined).toBe("provider_error_before_tool_call");
+    expect(cancel?.type === "issue" && "reason" in cancel.issue ? cancel.issue.reason : undefined).toBe("provider_error_before_tool_call");
     const providerError = events[1];
     expect(providerError?.type === "issue" ? providerError.issue.kind : undefined).toBe("provider_error");
   });

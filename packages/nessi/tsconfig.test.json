@@ -4,6 +4,6 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src", "tests/decision.test.ts"],
+  "include": ["src", "tests"],
   "exclude": []
 }

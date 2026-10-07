@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { openai } from "../src/ai/providers/openai.js";
 import type { Message } from "../src/types.js";
+import { stubFetch } from "./ai/helpers/fixtures.js";
 
 function user(text: string): Message {
   return { role: "user", content: [{ type: "text", text }] };
@@ -49,14 +50,14 @@ describe("openai provider tool_call id compatibility", () => {
 
     const originalFetch = globalThis.fetch;
     let capturedBody: any;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    stubFetch(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return sseResponse([
         JSON.stringify({
           choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
         }),
       ]);
-    }) as typeof fetch;
+    });
 
     try {
       const messages: Message[] = [
@@ -93,14 +94,14 @@ describe("openai provider tool_call id compatibility", () => {
 
     const originalFetch = globalThis.fetch;
     let capturedBody: any;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    stubFetch(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return sseResponse([
         JSON.stringify({
           choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
         }),
       ]);
-    }) as typeof fetch;
+    });
 
     try {
       const originalCallId = "call_abc123456789";
@@ -136,14 +137,14 @@ describe("openai provider tool_call id compatibility", () => {
 
     const originalFetch = globalThis.fetch;
     let capturedBody: any;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    stubFetch(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
       return sseResponse([
         JSON.stringify({
           choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
         }),
       ]);
-    }) as typeof fetch;
+    });
 
     try {
       const messages: Message[] = [user("find info"), toolResult("orphan_call_1")];
@@ -170,7 +171,7 @@ describe("openai provider tool_call id compatibility", () => {
     });
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
+    stubFetch(async () =>
       new Response(
         JSON.stringify({
           object: "error",
@@ -179,7 +180,7 @@ describe("openai provider tool_call id compatibility", () => {
           code: "3505",
         }),
         { status: 429, headers: { "Content-Type": "application/json" } },
-      )) as typeof fetch;
+      ));
 
     try {
       const events = [];
@@ -194,8 +195,8 @@ describe("openai provider tool_call id compatibility", () => {
       const error = events.find((event) => event.type === "issue");
       expect(error).toBeDefined();
       expect(error?.type).toBe("issue");
-      if (error?.type === "issue") {
-        expect(error.issue.kind).toBe("provider_error");
+      expect(error?.type === "issue" ? error.issue.kind : undefined).toBe("provider_error");
+      if (error?.type === "issue" && error.issue.kind === "provider_error") {
         expect(error.issue.retryable).toBe(true);
         expect(error.issue.message).toContain("Service tier capacity exceeded for this model.");
         expect(error.issue.message).toContain("3505");

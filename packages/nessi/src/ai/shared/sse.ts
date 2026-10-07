@@ -4,6 +4,12 @@ export type SSEEvent = {
   id?: string;
 };
 
+/** The part of a stream reader the parsers use; any WHATWG or runtime-specific reader fits. */
+export type ByteStreamReader = {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel?(reason?: unknown): Promise<void>;
+};
+
 export type SSETimeoutScope = "provider_first_byte" | "provider_idle";
 
 export class SSETimeoutError extends Error {
@@ -44,7 +50,7 @@ const parseFrame = (frame: string): SSEEvent | null => {
 };
 
 const readWithTimeout = async (
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: ByteStreamReader,
   scope: SSETimeoutScope,
   timeoutMs: number | undefined,
 ) => {
@@ -67,7 +73,7 @@ const readWithTimeout = async (
 }
 
 export const parseSSE = async function* (
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: ByteStreamReader,
   timeouts: SSETimeouts = {},
 ): AsyncGenerator<SSEEvent> {
   const decoder = new TextDecoder();

@@ -1,5 +1,7 @@
+import type { ByteStreamReader } from "./sse.js";
+
 export const parseNDJSON = async function* <T>(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: ByteStreamReader,
   timeouts: { firstByteMs?: number; idleMs?: number } = {},
 ): AsyncGenerator<T> {
   const decoder = new TextDecoder();
