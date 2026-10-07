@@ -95,7 +95,7 @@ export type AnthropicOptions = ProviderRequestDefaults & {
 
 const mapFinishReason = (reason: string | null | undefined, hasTools: boolean) => {
   if (reason === "tool_use") return "tool_use" as const;
-  if (reason === "max_tokens") return "max_tokens" as const;
+  if (reason === "max_tokens" || reason === "model_context_window_exceeded") return "max_tokens" as const;
   // A refusal stops the answer; tool calls in it must not run.
   if (reason === "refusal") return "error" as const;
   if (hasTools) return "tool_use" as const;

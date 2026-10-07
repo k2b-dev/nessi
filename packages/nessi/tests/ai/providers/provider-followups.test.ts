@@ -65,6 +65,9 @@ describe("provider follow-ups", () => {
 
     stubFetch(async () => jsonResponse({ content: [{ type: "tool_use", id: "t1", name: "x", input: {} }], stop_reason: "refusal" }));
     expect((await anthropic("claude", { apiKey: "k" }).complete({ messages: [] })).finishReason).toBe("error");
+
+    stubFetch(async () => jsonResponse({ content: [{ type: "text", text: "cut" }], stop_reason: "model_context_window_exceeded" }));
+    expect((await anthropic("claude", { apiKey: "k" }).complete({ messages: [] })).finishReason).toBe("max_tokens");
   });
 
   it("keeps a Mistral length cut when tool calls are still pending", async () => {
