@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, gemini, ollama } from "../../../src/ai/index.js";
-import { jsonResponse, stubFetch } from "../helpers/fixtures.js";
+import { anthropic, completeFromStream, gemini, mistral, ollama, openrouter } from "../../../src/ai/index.js";
+import { jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -55,5 +55,26 @@ describe("provider follow-ups", () => {
     const { message } = await anthropic("claude", { apiKey: "k" }).complete({ messages: [] });
 
     expect(message.content[0]).toMatchObject({ type: "tool_call", name: "lookup", id: expect.stringMatching(/^anthropic-[A-Za-z0-9]{8}-0$/) });
+  });
+
+  it("maps provider-side stops with tool calls to error across adapters", async () => {
+    stubFetch(async () => jsonResponse({
+      choices: [{ index: 0, message: { content: null, tool_calls: [{ id: "c1", function: { name: "x", arguments: "{}" } }] }, finish_reason: "error" }],
+    }));
+    expect((await openrouter("a/b", { apiKey: "k" }).complete({ messages: [] })).finishReason).toBe("error");
+
+    stubFetch(async () => jsonResponse({ content: [{ type: "tool_use", id: "t1", name: "x", input: {} }], stop_reason: "refusal" }));
+    expect((await anthropic("claude", { apiKey: "k" }).complete({ messages: [] })).finishReason).toBe("error");
+  });
+
+  it("keeps a Mistral length cut when tool calls are still pending", async () => {
+    const sse = [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"x","arguments":"{}"}}]},"finish_reason":null}]}',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"model_length"}]}',
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n";
+    stubFetch(async () => textResponse(sse, "text/event-stream"));
+
+    expect((await completeFromStream(mistral("m", { apiKey: "k" }), { messages: [] })).finishReason).toBe("max_tokens");
   });
 });

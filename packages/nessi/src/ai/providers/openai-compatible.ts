@@ -90,7 +90,8 @@ const normalizeToolCallIds = (mode: OpenAICompatibleConfig["compat"]) =>
 const mapFinishReason = (reason: string | null | undefined, hasTools: boolean): AssistantStopReason => {
   if (reason === "tool_calls") return "tool_use";
   if (reason === "length") return "max_tokens";
-  if (reason === "content_filter") return "error";
+  // The provider stopped the answer itself (filter or gateway error); its tool calls must not run.
+  if (reason === "content_filter" || reason === "error") return "error";
   if (hasTools) return "tool_use";
   return "stop";
 };
@@ -521,8 +522,8 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       }
 
       if (pendingToolCalls.length > 0) {
-        // A provider-side stop (e.g. content filter) stays visible even with pending calls.
-        if (latestFinishReason !== "error") latestFinishReason = "tool_use";
+        // A provider-side stop or a length cut stays visible even with pending calls.
+        if (latestFinishReason !== "error" && latestFinishReason !== "max_tokens") latestFinishReason = "tool_use";
         yield* flushToolCalls();
         yield* flushDeferredThinking();
       }
