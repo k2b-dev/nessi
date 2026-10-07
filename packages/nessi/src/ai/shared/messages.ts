@@ -18,7 +18,8 @@ export const thinkingBlock = (thinking: string): ThinkingBlock => ({ type: "thin
 export const toolCallBlock = (id: string, name: string, args: Record<string, unknown>): ToolCallBlock =>
   ({ type: "tool_call", id, name, args });
 
-const hasThinkingData = (block: ThinkingBlock) => block.signature !== undefined || block.redacted !== undefined;
+const hasThinkingData = (block: ThinkingBlock) =>
+  block.signature !== undefined || block.redacted !== undefined || block.details !== undefined;
 
 export const appendAssistantContentBlock = (
   content: AssistantContentBlock[],
@@ -28,9 +29,9 @@ export const appendAssistantContentBlock = (
   if (block.type === "thinking" && block.thinking.length === 0 && !hasThinkingData(block)) return;
 
   const last = content.at(-1);
-  if (block.type === "text" && last?.type === "text") {
+  // Signed text keeps its own block so the signature stays with the exact text it covers.
+  if (block.type === "text" && last?.type === "text" && block.signature === undefined && last.signature === undefined) {
     last.text += block.text;
-    if (block.signature !== undefined) last.signature = block.signature;
     return;
   }
   // Signed or encrypted reasoning must go back to the provider exactly as received.

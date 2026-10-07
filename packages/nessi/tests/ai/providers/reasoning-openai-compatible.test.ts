@@ -75,3 +75,75 @@ describe("reasoning effort for OpenAI-compatible providers", () => {
     }
   });
 });
+
+describe("OpenRouter reasoning_details round-trip", () => {
+  it("collects streamed reasoning items and sends them back unchanged", async () => {
+    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { fixtureText } = await import("../helpers/fixtures.js");
+    const bodies: Array<Record<string, unknown>> = [];
+    stubFetch(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return textResponse(await fixtureText("../fixtures/openai/openrouter-reasoning-details.sse"), "text/event-stream");
+    });
+    const provider = openrouter("anthropic/claude", { apiKey: "k" });
+
+    const { message } = await completeFromStream(provider, { messages: [] });
+
+    expect(message.provider).toBe("openrouter");
+    expect(message.content[0]).toEqual({
+      type: "thinking",
+      thinking: "Need weather.",
+      details: [
+        { type: "reasoning.text", text: "Need weather.", signature: "sig-1", index: 0, format: "anthropic-claude-v1" },
+        { type: "reasoning.encrypted", data: "enc-2", index: 1, format: "anthropic-claude-v1" },
+      ],
+    });
+    expect(message.content[1]).toMatchObject({ type: "tool_call", id: "call_1", name: "weather" });
+
+    await completeFromStream(provider, {
+      messages: [
+        { role: "user", content: ["Weather?"] },
+        message,
+        { role: "tool_result", callId: "call_1", name: "weather", result: "sunny" },
+      ],
+    });
+    const replayed = (bodies[1]!.messages as Array<Record<string, unknown>>)[1]!;
+    expect(replayed.reasoning_details).toEqual([
+      { type: "reasoning.text", text: "Need weather.", signature: "sig-1", index: 0, format: "anthropic-claude-v1" },
+      { type: "reasoning.encrypted", data: "enc-2", index: 1, format: "anthropic-claude-v1" },
+    ]);
+  });
+
+  it("does not send reasoning items to another provider", async () => {
+    const bodies = await sentBodies(openai("gpt-x", { apiKey: "k" }), {
+      messages: [
+        { role: "user", content: ["Hi"] },
+        {
+          role: "assistant",
+          provider: "openrouter",
+          content: [{ type: "thinking", thinking: "x", details: [{ type: "reasoning.text", text: "x" }] }, { type: "text", text: "Hello" }],
+        },
+      ],
+    });
+    for (const body of bodies) {
+      expect((body.messages as Array<Record<string, unknown>>)[1]).toEqual({ role: "assistant", content: "Hello" });
+    }
+  });
+
+  it("parses reasoning items from non-streaming responses", async () => {
+    stubFetch(async () => new Response(JSON.stringify({
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "Hi", reasoning_details: [{ type: "reasoning.summary", summary: "Greeting.", index: 0 }] },
+        finish_reason: "stop",
+      }],
+    }), { headers: { "Content-Type": "application/json" } }));
+
+    const { message } = await openrouter("x/y", { apiKey: "k" }).complete({ messages: [] });
+
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "Greeting.", details: [{ type: "reasoning.summary", summary: "Greeting.", index: 0 }] },
+      { type: "text", text: "Hi" },
+    ]);
+  });
+});

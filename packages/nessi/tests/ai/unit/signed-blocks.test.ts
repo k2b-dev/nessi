@@ -52,6 +52,18 @@ describe("signed blocks in the stream normalizer", () => {
     ]);
   });
 
+  it("keeps leading whitespace of thinking byte for byte", async () => {
+    expect(await blocksOf([
+      { type: "thinking", delta: "\n " },
+      { type: "thinking", delta: "Reason" },
+      { type: "thinking", delta: "", signature: "s" },
+    ])).toEqual([{ type: "thinking", thinking: "\n Reason", signature: "s" }]);
+  });
+
+  it("does not open a block for whitespace-only text", async () => {
+    expect(await blocksOf([{ type: "text", delta: "\n" }, { type: "text", delta: "Hi" }])).toEqual([{ type: "text", text: "Hi" }]);
+  });
+
   it("emits unsigned blocks exactly as before", async () => {
     expect(await blocksOf([{ type: "thinking", delta: "plain" }, { type: "text", delta: "text" }]))
       .toEqual([{ type: "thinking", thinking: "plain" }, { type: "text", text: "text" }]);
@@ -74,12 +86,18 @@ describe("appendAssistantContentBlock", () => {
     ]);
   });
 
-  it("merges text and keeps the latest text signature", () => {
+  it("merges unsigned text but keeps signed text in its own block", () => {
     const content: AssistantContentBlock[] = [];
     appendAssistantContentBlock(content, { type: "text", text: "Hel" });
-    appendAssistantContentBlock(content, { type: "text", text: "lo", signature: "t" });
+    appendAssistantContentBlock(content, { type: "text", text: "lo" });
+    appendAssistantContentBlock(content, { type: "text", text: "first", signature: "s1" });
+    appendAssistantContentBlock(content, { type: "text", text: "second", signature: "s2" });
     appendAssistantContentBlock(content, { type: "text", text: "" });
 
-    expect(content).toEqual([{ type: "text", text: "Hello", signature: "t" }]);
+    expect(content).toEqual([
+      { type: "text", text: "Hello" },
+      { type: "text", text: "first", signature: "s1" },
+      { type: "text", text: "second", signature: "s2" },
+    ]);
   });
 });

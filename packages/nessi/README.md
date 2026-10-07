@@ -290,21 +290,31 @@ accepts is up to the model; unsupported values come back as provider errors.
 | `openrouter` | `reasoning: { effort }` |
 | `ollama` | `think`; `"none"` sends `false` |
 | `anthropic` | `thinking: { type: "adaptive" }` plus `output_config.effort`; `"none"` sends `thinking: { type: "disabled" }` |
+| `gemini` | `thinkingConfig.thinkingLevel`; `"none"` sends `thinkingBudget: 0` |
+| `mistral` | `reasoning_effort` |
 
-On vLLM, `"none"` also turns off thinking for templates such as Qwen's.
+Recent vLLM versions also pass the level to the chat template and turn off
+thinking for templates such as Qwen's when it is `"none"`. On older versions,
+use `extraBody: { chat_template_kwargs: { enable_thinking: false } }`.
 Anthropic models that cannot turn thinking off reject `"none"`; models before
 Claude 4.6 need the budget mode through
 `extraBody: { thinking: { type: "enabled", budget_tokens: 4096 } }` instead of
 `reasoningEffort`. Thinking counts against `max_tokens`, so the Anthropic
-default `maxOutputTokens` is 8192. Ollama
+default `maxOutputTokens` is 8192. Gemini 3 cannot turn thinking off completely;
+use `"minimal"` there. Gemini 2.5 takes token budgets instead of levels, which
+`extraBody: { generationConfig: { thinkingConfig: { thinkingBudget: 2048 } } }`
+sets. Gemini returns thought summaries only with
+`extraBody: { generationConfig: { thinkingConfig: { includeThoughts: true } } }`. Ollama
 models that only accept `think: true` or `false` need `extraBody: { think: true }`
 to turn thinking on.
 
 Thinking appears as `thinking` blocks. Some providers sign their reasoning or
 return it encrypted and require it back unchanged in later requests, especially
-during tool loops. Nessi keeps that data on the blocks (`signature`, `redacted`)
-and records the producing provider in `message.provider`; each provider sends
-it back only to itself. Store assistant messages as they are, including these
+during tool loops. Nessi keeps that data on the blocks (`signature`, `redacted`,
+and `details` for OpenRouter's `reasoning_details`) and records the producing
+provider in `message.provider`; each provider sends it back only to itself.
+This covers Anthropic thinking, Gemini thought signatures, Mistral thinking
+chunks and OpenRouter reasoning items. Store assistant messages as they are, including these
 fields, and keep history append-only.
 
 `disableReasoning` is deprecated. It keeps its original behavior: OpenAI-compatible

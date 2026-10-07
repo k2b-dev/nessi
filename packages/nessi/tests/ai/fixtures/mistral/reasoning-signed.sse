@@ -1,0 +1,8 @@
+data: {"choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"Check "}]}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"units."}],"signature":"m-sig","closed":true}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"42 km"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}
+
+data: [DONE]
+

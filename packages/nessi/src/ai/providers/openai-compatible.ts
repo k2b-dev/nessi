@@ -1,5 +1,5 @@
 import { formatConnectionError, isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
-import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
+import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -8,6 +8,7 @@ import { createStrictToolCallIdFactory } from "../shared/tool-call-ids.js";
 import { toOpenAITools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
 import type {
+  AssistantContentBlock,
   AssistantStopReason,
   GenerateRequest,
   GenerateResult,
@@ -23,6 +24,7 @@ import type {
 type OAIMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string | OAIContentPart[] | null;
+  reasoning_details?: Record<string, unknown>[];
   tool_calls?: OAIToolCall[];
   tool_call_id?: string;
   name?: string;
@@ -36,6 +38,12 @@ type OAIToolCall = {
   function: { name: string; arguments: string };
 };
 
+/** OpenRouter-style reasoning item: reasoning.text, reasoning.summary or reasoning.encrypted. */
+type ReasoningDetail = Record<string, unknown> & { type?: string; text?: string; summary?: string; index?: number };
+
+const readableReasoning = (detail: ReasoningDetail) =>
+  (typeof detail.text === "string" ? detail.text : "") || (typeof detail.summary === "string" ? detail.summary : "");
+
 type SSEChunk = {
   id?: string;
   /** Some gateways (e.g. OpenRouter) report failures after the response started as an error chunk. */
@@ -46,11 +54,7 @@ type SSEChunk = {
       content?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
-      reasoning_details?: Array<{
-        type?: string;
-        text?: string;
-        summary?: string;
-      }>;
+      reasoning_details?: ReasoningDetail[];
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -60,6 +64,9 @@ type SSEChunk = {
     message?: {
       role?: string;
       content?: string | null;
+      reasoning?: string | null;
+      reasoning_content?: string | null;
+      reasoning_details?: ReasoningDetail[];
       tool_calls?: Array<{
         id?: string;
         type?: string;
@@ -162,6 +169,11 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
         }
       }
       const out: OAIMessage = { role: "assistant", content: text || null };
+      // Reasoning items go back unchanged, and only to the provider that produced them.
+      const details = message.provider === config.name
+        ? message.content.flatMap((block) => (block.type === "thinking" && block.details ? block.details : []))
+        : [];
+      if (details.length > 0) out.reasoning_details = details;
       if (toolCalls.length > 0) out.tool_calls = toolCalls;
       result.push(out);
       continue;
@@ -199,9 +211,7 @@ const usageFromChunk = (chunk: SSEChunk, config: OpenAICompatibleConfig): Usage 
 const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleConfig) => {
   if (config.compat?.thinkingFormat === "none") return "";
   const text = delta.reasoning || delta.reasoning_content || "";
-  const details = (delta.reasoning_details ?? [])
-    .map((detail) => detail.text ?? detail.summary ?? "")
-    .join("");
+  const details = (delta.reasoning_details ?? []).map(readableReasoning).join("");
   // Select one representation per delta; providers may send the same text in multiple fields.
   return config.compat?.thinkingFormat === "text" ? text || details : details || text;
 };
@@ -212,7 +222,16 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
 
   const choice = payload.choices?.[0];
   const message = choice?.message;
-  const content = message?.content ?? "";
+  const thinking: AssistantContentBlock[] = [];
+  if (config.compat?.thinkingFormat !== "none") {
+    if (message?.reasoning_details?.length && config.compat?.thinkingFormat !== "text") {
+      const details = message.reasoning_details;
+      thinking.push({ type: "thinking", thinking: details.map(readableReasoning).join(""), details });
+    } else {
+      const text = message?.reasoning || message?.reasoning_content || "";
+      if (text) thinking.push({ type: "thinking", thinking: text });
+    }
+  }
   const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => ({
     type: "tool_call",
     id: call.id ?? `${config.name}-${index}`,
@@ -224,7 +243,13 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
 
   return {
-    message: buildAssistantMessage(config.model, content ?? "", "", toolCalls, usage, finishReason, config.name),
+    message: buildAssistantMessageFromContent(
+      config.model,
+      [...thinking, ...(message?.content ? [{ type: "text" as const, text: message.content }] : []), ...toolCalls],
+      usage,
+      finishReason,
+      config.name,
+    ),
     usage,
     finishReason,
     providerMeta: {
@@ -357,6 +382,31 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       let latestUsage: Usage | undefined;
       let latestFinishReason: AssistantStopReason | undefined;
       let sawDone = false;
+      // Reasoning items arrive in pieces keyed by `index`; they are completed and attached to the
+      // thinking block once the answer or a tool call starts, or the stream ends.
+      const reasoningItems = new Map<number, ReasoningDetail>();
+      const collectReasoningDetail = (detail: ReasoningDetail, position: number) => {
+        const index = typeof detail.index === "number" ? detail.index : position;
+        const current = reasoningItems.get(index);
+        if (!current) {
+          reasoningItems.set(index, { ...detail });
+          return;
+        }
+        for (const [key, value] of Object.entries(detail)) {
+          const previous = current[key];
+          if ((key === "text" || key === "summary" || key === "data") && typeof value === "string" && typeof previous === "string") {
+            current[key] = previous + value;
+          } else if (value !== undefined && value !== null && value !== "") {
+            current[key] = value;
+          }
+        }
+      };
+      const flushReasoningDetails = function* (): Generator<RawStreamEvent> {
+        if (reasoningItems.size === 0) return;
+        const details = [...reasoningItems.entries()].sort(([left], [right]) => left - right).map(([, item]) => item);
+        reasoningItems.clear();
+        yield { type: "thinking", delta: "", details };
+      };
       const startToolCall = function* (buffer: ToolBuffer) {
         if (buffer.started || !buffer.name.trim()) return;
         buffer.started = true;
@@ -405,9 +455,13 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
         const delta = choice.delta;
 
-        if (delta.content) yield { type: "text", delta: delta.content };
         const thinking = thinkingFromDelta(delta, config);
         if (thinking) yield { type: "thinking", delta: thinking };
+        if (config.compat?.thinkingFormat !== "none" && config.compat?.thinkingFormat !== "text") {
+          (delta.reasoning_details ?? []).forEach(collectReasoningDetail);
+        }
+        if (delta.content || delta.tool_calls) yield* flushReasoningDetails();
+        if (delta.content) yield { type: "text", delta: delta.content };
 
         if (delta.tool_calls) {
           for (const toolCall of delta.tool_calls) {
@@ -455,6 +509,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         return;
       }
 
+      yield* flushReasoningDetails();
       if (pendingToolCalls.length > 0) {
         latestFinishReason = "tool_use";
         yield* flushToolCalls();

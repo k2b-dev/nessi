@@ -61,7 +61,15 @@ describe("openAICompatible provider", () => {
       const textIndex = testCase.expected ? 1 : 0;
       const toolIndex = textIndex + 1;
 
-      expect(events.filter((event) => event.type !== "usage")).toEqual([
+      // Reasoning item round-trips are covered separately; this compares readable text only.
+      const withoutDetails = events
+        .filter((event) => event.type !== "usage")
+        .map((event) => {
+          if (event.type !== "block_end" || event.block.type !== "thinking") return event;
+          const { details: _details, ...block } = event.block;
+          return { ...event, block };
+        });
+      expect(withoutDetails).toEqual([
         ...(testCase.expected ? [
           { type: "block_start", blockId: "block-0", index: 0, kind: "thinking" },
           { type: "block_delta", blockId: "block-0", delta: testCase.expected },

@@ -45,6 +45,25 @@ describe("anthropic thinking", () => {
     expect(message.content).toEqual(thinkingTurn.content);
   });
 
+  it("joins split signatures and keeps thinking byte for byte", async () => {
+    stubFetch(async () => textResponse(await fixtureText("../fixtures/anthropic/split-signature.sse"), "text/event-stream"));
+
+    const { message } = await completeFromStream(anthropic("claude", { apiKey: "k" }), { messages: [] });
+
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "\n Reason", signature: "abcdef" },
+      { type: "text", text: "Done." },
+    ]);
+  });
+
+  it("omits assistant turns that hold only unsigned thinking", async () => {
+    const interrupted: AssistantMessage = { role: "assistant", provider: "anthropic", content: [{ type: "thinking", thinking: "half" }] };
+
+    const body = await sentBody({ messages: [{ role: "user", content: ["a"] }, interrupted, { role: "user", content: ["b"] }] });
+
+    expect(body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }]);
+  });
+
   it("parses thinking from non-streaming responses", async () => {
     stubFetch(async () => jsonResponse({
       content: [

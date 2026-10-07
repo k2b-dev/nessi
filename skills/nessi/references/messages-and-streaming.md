@@ -37,8 +37,8 @@ const assistantMessage = {
 };
 ```
 
-`signature` and `redacted` (on thinking blocks; `signature` also on text and
-tool calls) are opaque provider data, and `message.provider` names the provider
+`signature`, `redacted` and `details` (on thinking blocks; `signature` also on
+text and tool calls) are opaque provider data, and `message.provider` names the provider
 that produced the message. Keep them when storing history: providers need them
 back unchanged, and each provider only sends its own data back.
 

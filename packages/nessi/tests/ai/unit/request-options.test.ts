@@ -45,6 +45,13 @@ describe("withExtraBody", () => {
     expect(body.generationConfig).toEqual({ temperature: 1, stopSequences: ["a"] });
   });
 
+  it("replaces values that are not plain objects instead of merging into them", () => {
+    const date = new Date("2026-01-01T00:00:00Z");
+    expect(withExtraBody({ metadata: { stale: true } }, { messages: [], extraBody: { metadata: date } }).metadata).toBe(date);
+    expect(withExtraBody({ metadata: date }, { messages: [], extraBody: { metadata: { fresh: true } } }).metadata)
+      .toEqual({ fresh: true });
+  });
+
   it("ignores __proto__ keys", () => {
     const merged = withExtraBody({}, { messages: [], extraBody: JSON.parse('{"__proto__": {"polluted": true}}') });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();

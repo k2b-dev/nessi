@@ -355,6 +355,10 @@ export type CompactContext = {
   fillRatio?: number;
   /** Aborted when the surrounding loop or compact() run is aborted. Pass it to provider calls. */
   signal?: AbortSignal;
+  /** The loop's `reasoningEffort`, to forward to provider calls if the compaction should use it. */
+  reasoningEffort?: ReasoningEffort;
+  /** The loop's `extraBody`, to forward to provider calls if the compaction should use it. */
+  extraBody?: Record<string, unknown>;
 }
 
 export type CompactOptions = {

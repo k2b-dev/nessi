@@ -1276,6 +1276,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             force: shouldForce,
             fillRatio,
             signal,
+            reasoningEffort,
+            extraBody,
           });
           if (compaction) {
             // Routine compaction is best effort: report a failure and continue with the current history.
@@ -1449,6 +1451,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
               force: true,
               fillRatio,
               signal,
+              reasoningEffort,
+              extraBody,
             });
             if (compaction) {
               yield* runCompaction(compaction);

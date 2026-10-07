@@ -14,8 +14,12 @@ export const resolveReasoning = (request: GenerateRequest, defaults?: ProviderRe
   return { effort: defaults?.reasoningEffort, legacyDisable: false };
 };
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/** Only object literals (or null-prototype objects) merge; dates, class instances and arrays replace. */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const mergeInto = (target: Record<string, unknown>, extra: Record<string, unknown>) => {
   for (const [key, value] of Object.entries(extra)) {

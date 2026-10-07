@@ -1,5 +1,9 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
-import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
+import {
+  appendAssistantContentBlock,
+  assertOnlySupportedFiles,
+  buildAssistantMessageFromContent,
+} from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -8,6 +12,7 @@ import { createStrictToolCallIdFactory } from "../shared/tool-call-ids.js";
 import { toOpenAITools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
 import type {
+  AssistantContentBlock,
   GenerateRequest,
   GenerateResult,
   Message,
@@ -20,9 +25,14 @@ import type {
   Usage,
 } from "../types.js";
 
+type MistralThinkChunk = { type: "thinking"; thinking: Array<{ type: "text"; text: string }>; signature?: string };
+
 type MistralMessage = {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> | null;
+  content:
+    | string
+    | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } } | MistralThinkChunk>
+    | null;
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -38,7 +48,7 @@ type MistralContent =
   | null
   | Array<
     | { type: "text"; text: string }
-    | { type: "thinking"; thinking: Array<{ type: "text"; text: string }> }
+    | MistralThinkChunk
   >;
 
 type MistralChunk = {
@@ -76,15 +86,35 @@ const usageFromChunk = (chunk: MistralChunk, options?: MistralOptions): Usage | 
   );
 };
 
-const splitContent = (content: MistralContent | undefined) => {
-  if (typeof content === "string") return { text: content, thinking: "" };
-  let text = "";
-  let thinking = "";
-  for (const chunk of content ?? []) {
-    if (chunk.type === "text") text += chunk.text;
-    else if (chunk.type === "thinking") thinking += chunk.thinking.map((part) => part.text ?? "").join("");
+const thinkText = (chunk: MistralThinkChunk) => chunk.thinking.map((part) => part.text ?? "").join("");
+
+/** Content blocks in response order; thinking chunks keep their signature. */
+const contentBlocks = (content: MistralContent | undefined): AssistantContentBlock[] => {
+  const blocks: AssistantContentBlock[] = [];
+  if (typeof content === "string") {
+    appendAssistantContentBlock(blocks, { type: "text", text: content });
+    return blocks;
   }
-  return { text, thinking };
+  for (const chunk of content ?? []) {
+    if (chunk.type === "text") appendAssistantContentBlock(blocks, { type: "text", text: chunk.text });
+    else if (chunk.type === "thinking") {
+      appendAssistantContentBlock(blocks, {
+        type: "thinking",
+        thinking: thinkText(chunk),
+        ...(chunk.signature !== undefined ? { signature: chunk.signature } : {}),
+      });
+    }
+  }
+  return blocks;
+};
+
+/**
+ * Sends `reasoning_effort` unchanged ("none" turns reasoning off). The deprecated
+ * `disableReasoning` stays a no-op here, as before.
+ */
+const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest, options?: MistralOptions) => {
+  const { effort } = resolveReasoning(request, options);
+  if (effort !== undefined) body.reasoning_effort = effort;
 };
 
 const convertMessages = (messages: Message[], systemPrompt: string | undefined, options?: MistralOptions) => {
@@ -108,11 +138,24 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
     }
 
     if (message.role === "assistant") {
+      // Mistral wants its own reasoning replayed with the answer; other providers' reasoning stays out.
+      const ownThinking = message.provider === "mistral" && message.content.some((block) => block.type === "thinking");
       let text = "";
+      const chunks: Array<{ type: "text"; text: string } | MistralThinkChunk> = [];
       const toolCalls: NonNullable<MistralMessage["tool_calls"]> = [];
       for (const block of message.content) {
-        if (block.type === "text") text += block.text;
-        else if (block.type === "tool_call") {
+        if (block.type === "thinking") {
+          if (ownThinking) {
+            chunks.push({
+              type: "thinking",
+              thinking: [{ type: "text", text: block.thinking }],
+              ...(block.signature !== undefined ? { signature: block.signature } : {}),
+            });
+          }
+        } else if (block.type === "text") {
+          text += block.text;
+          if (ownThinking && block.text) chunks.push({ type: "text", text: block.text });
+        } else if (block.type === "tool_call") {
           const mappedId = makeStrictId ? makeStrictId(block.id) : block.id;
           if (makeStrictId) {
             const queue = pendingToolIds.get(block.id) ?? [];
@@ -126,7 +169,7 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
           });
         }
       }
-      const next: MistralMessage = { role: "assistant", content: text || null };
+      const next: MistralMessage = { role: "assistant", content: ownThinking ? chunks : text || null };
       if (toolCalls.length > 0) next.tool_calls = toolCalls;
       out.push(next);
       continue;
@@ -214,6 +257,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const temperature = resolveTemperature(request);
       if (temperature !== undefined) body.temperature = temperature;
       if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
+      applyReasoning(body, request, options);
 
       const response = await fetch(`${baseURL}/chat/completions`, {
         method: "POST",
@@ -243,10 +287,10 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       }));
       const usage = usageFromChunk(payload, options);
       const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
-      const { text, thinking } = splitContent(choice?.message?.content);
+      const content = [...contentBlocks(choice?.message?.content), ...toolCalls];
 
       return {
-        message: buildAssistantMessage(model, text, thinking, toolCalls, usage, finishReason, "mistral"),
+        message: buildAssistantMessageFromContent(model, content, usage, finishReason, "mistral"),
         usage,
         finishReason,
         providerMeta: { model },
@@ -268,6 +312,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const temperature = resolveTemperature(request);
       if (temperature !== undefined) body.temperature = temperature;
       if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
+      applyReasoning(body, request, options);
 
       const result = await openSSEStream(
         `${baseURL}/chat/completions`,
@@ -338,6 +383,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
               for (const part of chunk.thinking) {
                 if (part.text) yield { type: "thinking", delta: part.text };
               }
+              if (chunk.signature) yield { type: "thinking", delta: "", signature: chunk.signature };
             }
           }
         }

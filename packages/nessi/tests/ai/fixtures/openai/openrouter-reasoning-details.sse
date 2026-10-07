@@ -1,0 +1,10 @@
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Need ","index":0,"format":"anthropic-claude-v1"}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"weather.","index":0}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"","signature":"sig-1","index":0},{"type":"reasoning.encrypted","data":"enc-2","index":1,"format":"anthropic-claude-v1"}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"weather","arguments":"{\"city\":\"Ulm\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+

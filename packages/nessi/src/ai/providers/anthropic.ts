@@ -149,7 +149,8 @@ const convertMessages = (messages: Message[]) => {
           });
         }
       }
-      pushMessage(out, { role: "assistant", content });
+      // Interrupted turns can hold only unsigned thinking; an empty assistant message is invalid.
+      if (content.length > 0) pushMessage(out, { role: "assistant", content });
       continue;
     }
 
@@ -342,6 +343,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       let syntheticIndex = 0;
       let sawToolCall = false;
       let sawMessageStop = false;
+      const thinkingSignatures = new Map<number, string>();
 
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
@@ -397,7 +399,9 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           } else if (payload.delta?.type === "thinking_delta" && payload.delta.thinking) {
             yield { type: "thinking", delta: payload.delta.thinking };
           } else if (payload.delta?.type === "signature_delta" && payload.delta.signature) {
-            yield { type: "thinking", delta: "", signature: payload.delta.signature };
+            // Completed at content_block_stop, so a signature split over several deltas stays whole.
+            const index = typeof payload.index === "number" ? payload.index : -1;
+            thinkingSignatures.set(index, (thinkingSignatures.get(index) ?? "") + payload.delta.signature);
           } else if (payload.delta?.type === "input_json_delta") {
             if (typeof payload.index !== "number") continue;
             const index = payload.index;
@@ -410,6 +414,12 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         }
 
         if (event.event === "content_block_stop") {
+          const signatureIndex = typeof payload.index === "number" ? payload.index : -1;
+          const signature = thinkingSignatures.get(signatureIndex);
+          if (signature !== undefined) {
+            thinkingSignatures.delete(signatureIndex);
+            yield { type: "thinking", delta: "", signature };
+          }
           if (typeof payload.index !== "number") continue;
           const index = payload.index;
           const existing = toolBuffers.get(index);

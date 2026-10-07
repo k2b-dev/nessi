@@ -19,6 +19,8 @@ export type ThinkingBlock = {
   signature?: string;
   /** Encrypted reasoning without readable text (Anthropic `redacted_thinking`). */
   redacted?: string;
+  /** Original OpenRouter-style `reasoning_details` items behind this block, sent back as they are. */
+  details?: Record<string, unknown>[];
 };
 
 export type ToolCallBlock = {
@@ -259,10 +261,10 @@ export type RawStreamEvent =
   /** `signature` attaches to the current text block. */
   | { type: "text"; delta: string; signature?: string }
   /**
-   * `signature` or `redacted` complete the current thinking block (or form one when none is open);
+   * `signature`, `redacted` or `details` complete the current thinking block (or form one when none is open);
    * the next thinking delta starts a new block.
    */
-  | { type: "thinking"; delta: string; signature?: string; redacted?: string }
+  | { type: "thinking"; delta: string; signature?: string; redacted?: string; details?: Record<string, unknown>[] }
   | { type: "tool_start"; callId: string; name: string }
   | { type: "tool_delta"; callId: string; argsDelta: string }
   | { type: "tool_call"; callId: string; name: string; args: Record<string, unknown>; signature?: string }

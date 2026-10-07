@@ -180,6 +180,27 @@ describe("nessi loop lifecycle", () => {
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "stop" });
   });
 
+  it("hands the loop's reasoning settings to compaction", async () => {
+    let seen: { reasoningEffort?: string; extraBody?: Record<string, unknown> } = {};
+    await collect(nessi({
+      provider: mockProvider([
+        { type: "text", delta: "Done." },
+        { type: "usage", usage: { input: 1, output: 1, total: 2 } },
+      ]),
+      store: memoryStore(),
+      systemPrompt: "sys",
+      input: "go",
+      reasoningEffort: "low",
+      extraBody: { top_k: 3 },
+      compact: (ctx) => {
+        seen = { reasoningEffort: ctx.reasoningEffort, extraBody: ctx.extraBody };
+        return null;
+      },
+    }));
+
+    expect(seen).toEqual({ reasoningEffort: "low", extraBody: { top_k: 3 } });
+  });
+
   it("does not append input when the signal is already aborted", async () => {
     const store = memoryStore();
     const controller = new AbortController();

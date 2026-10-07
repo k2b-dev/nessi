@@ -156,9 +156,13 @@ Provider mappings:
   `false`; boolean-only models need `extraBody: { think: true }`); Anthropic
   sends adaptive thinking plus `output_config.effort` (`"none"` sends
   `thinking: { type: "disabled" }`; pre-4.6 models need the budget mode via
-  `extraBody`).
-- Signed or encrypted reasoning stays on `thinking` blocks (`signature`,
-  `redacted`) and `message.provider` records the producer. Persist assistant
+  `extraBody`); Gemini sends `thinkingConfig.thinkingLevel` (`"none"` sends
+  `thinkingBudget: 0`; Gemini 3 cannot fully disable, use `"minimal"`; 2.5
+  budgets and `includeThoughts` go through `extraBody.generationConfig`);
+  Mistral sends `reasoning_effort`.
+- Signed or encrypted reasoning stays on blocks (`signature`, `redacted`,
+  OpenRouter `details`; Gemini also signs text and tool calls) and
+  `message.provider` records the producer. Persist assistant
   messages unchanged and append-only so the provider gets them back intact.
 - `extraBody` (provider and call) merges extra fields into the request body;
   plain objects merge deeply. Use it for parameters Nessi does not model, e.g.
@@ -288,7 +292,7 @@ const provider = mistral("mistral-small-latest", {
 });
 ```
 
-Mistral looks OpenAI-like but has enough tool-call differences to use its native adapter. Keep tool-call IDs short if the backend requires it.
+Mistral looks OpenAI-like but has enough tool-call differences to use its native adapter. Keep tool-call IDs short if the backend requires it. Reasoning models return thinking chunks, which Nessi replays with their signatures in later turns.
 
 ## Gemini
 
@@ -301,7 +305,11 @@ const provider = gemini("gemini-2.0-flash", {
 });
 ```
 
-Gemini supports native multimodal input and function calls. `disableReasoning: true` maps to a zero thinking budget.
+Gemini supports native multimodal input and function calls. Thought summaries
+become `thinking` blocks, and thought signatures are kept on their parts and
+sent back automatically, which Gemini 3 requires for function calling. Function
+calls from other providers' history get Gemini's documented placeholder
+signature.
 
 ## Provider selection heuristics
 

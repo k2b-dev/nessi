@@ -1,5 +1,9 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
-import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
+import {
+  appendAssistantContentBlock,
+  assertOnlySupportedFiles,
+  buildAssistantMessageFromContent,
+} from "../shared/messages.js";
 import { safeJsonParse } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -7,6 +11,7 @@ import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toGeminiTools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
 import type {
+  AssistantContentBlock,
   GenerateRequest,
   GenerateResult,
   Message,
@@ -15,11 +20,14 @@ import type {
   ProviderTimeouts,
   RawStreamEvent,
   StreamEvent,
-  ToolCallBlock,
 } from "../types.js";
 
 type GeminiPart = {
   text?: string;
+  /** Marks a thought summary part. */
+  thought?: boolean;
+  /** Opaque signature that must be returned in the same part (required for Gemini 3 function calls). */
+  thoughtSignature?: string;
   inlineData?: { mimeType: string; data: string };
   functionCall?: { name: string; args?: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
@@ -64,6 +72,8 @@ const functionResponseBody = (result: unknown, isError: boolean | undefined): Re
   return isPlainObject(result) ? result : { output: result };
 };
 
+const FOREIGN_CALL_SIGNATURE = "skip_thought_signature_validator";
+
 const convertMessages = (messages: Message[]) => {
   const out: GeminiContent[] = [];
   for (const message of messages) {
@@ -81,14 +91,27 @@ const convertMessages = (messages: Message[]) => {
     }
 
     if (message.role === "assistant") {
+      // Signatures go back only to Gemini, in the part they came with. Unsigned thought summaries are not resent.
+      const ownMessage = message.provider === "gemini";
+      const signed = (signature: string | undefined) => (ownMessage && signature !== undefined ? { thoughtSignature: signature } : {});
       const parts: GeminiPart[] = [];
+      let firstCall = true;
       for (const block of message.content) {
-        if (block.type === "text") parts.push({ text: block.text });
+        if (block.type === "thinking") {
+          if (ownMessage && block.signature !== undefined) {
+            parts.push({ text: block.thinking, thought: true, thoughtSignature: block.signature });
+          }
+        } else if (block.type === "text") parts.push({ text: block.text, ...signed(block.signature) });
         else if (block.type === "tool_call") {
-          parts.push({ functionCall: { name: block.name, args: block.args } });
+          const part: GeminiPart = { functionCall: { name: block.name, args: block.args }, ...signed(block.signature) };
+          // Gemini 3 rejects unsigned function calls; this documented value skips the check for
+          // history that Gemini did not produce.
+          if (!ownMessage && firstCall) part.thoughtSignature = FOREIGN_CALL_SIGNATURE;
+          firstCall = false;
+          parts.push(part);
         }
       }
-      out.push({ role: "model", parts });
+      if (parts.length > 0) out.push({ role: "model", parts });
       continue;
     }
 
@@ -116,6 +139,18 @@ const usageFromResponse = (response: GeminiResponse, options?: GeminiOptions) =>
     options?.creditsPerInputToken,
     options?.creditsPerOutputToken,
   );
+
+/**
+ * Levels go to `thinkingLevel` (Gemini 3); "none" and the deprecated `disableReasoning` set a zero
+ * thinking budget. Models that cannot turn thinking off or do not know a level answer with a 400.
+ */
+const applyReasoning = (generationConfig: Record<string, unknown>, request: GenerateRequest, options?: GeminiOptions) => {
+  const reasoning = resolveReasoning(request, options);
+  if (reasoning.legacyDisable || reasoning.effort === "none") generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  else if (reasoning.effort !== undefined) generationConfig.thinkingConfig = { thinkingLevel: reasoning.effort };
+};
+
+const signatureOf = (part: GeminiPart) => (part.thoughtSignature !== undefined ? { signature: part.thoughtSignature } : {});
 
 const mapFinishReason = (reason: string | undefined, hasTools: boolean) => {
   if (reason === "MAX_TOKENS") return "max_tokens" as const;
@@ -149,7 +184,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
     if (temperature !== undefined) generationConfig.temperature = temperature;
     const maxOutputTokens = request.maxOutputTokens ?? options?.maxOutputTokens;
     if (maxOutputTokens !== undefined) generationConfig.maxOutputTokens = maxOutputTokens;
-    if (request.disableReasoning) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    applyReasoning(generationConfig, request, options);
     if (request.responseFormat) {
       generationConfig.responseMimeType = "application/json";
       generationConfig.responseJsonSchema = request.responseFormat.schema;
@@ -167,7 +202,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       streaming: true,
       tools: true,
       images: true,
-      thinking: false,
+      thinking: true,
       usage: true,
       structuredOutput: true,
     },
@@ -191,21 +226,28 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const payload = safeJsonParse<GeminiResponse>(await response.text());
       if (!payload) throw new Error("gemini returned invalid JSON.");
       const candidate = payload.candidates?.[0];
-      const parts = candidate?.content?.parts ?? [];
-      const text = parts.map((part) => part.text ?? "").join("");
-      const toolCalls: ToolCallBlock[] = parts
-        .filter((part): part is GeminiPart & { functionCall: { name: string; args?: Record<string, unknown> } } => Boolean(part.functionCall))
-        .map((part, index) => ({
-          type: "tool_call",
-          id: `${requestId}-${index}`,
-          name: part.functionCall!.name,
-          args: part.functionCall!.args ?? {},
-        }));
+      const content: AssistantContentBlock[] = [];
+      let toolCount = 0;
+      for (const part of candidate?.content?.parts ?? []) {
+        if (part.functionCall) {
+          content.push({
+            type: "tool_call",
+            id: `${requestId}-${toolCount++}`,
+            name: part.functionCall.name,
+            args: part.functionCall.args ?? {},
+            ...signatureOf(part),
+          });
+        } else if (part.thought) {
+          appendAssistantContentBlock(content, { type: "thinking", thinking: part.text ?? "", ...signatureOf(part) });
+        } else if (part.text !== undefined || part.thoughtSignature !== undefined) {
+          appendAssistantContentBlock(content, { type: "text", text: part.text ?? "", ...signatureOf(part) });
+        }
+      }
       const usage = usageFromResponse(payload, options);
-      const finishReason = mapFinishReason(candidate?.finishReason, toolCalls.length > 0);
+      const finishReason = mapFinishReason(candidate?.finishReason, toolCount > 0);
 
       return {
-        message: buildAssistantMessage(model, text, "", toolCalls, usage, finishReason, "gemini"),
+        message: buildAssistantMessageFromContent(model, content, usage, finishReason, "gemini"),
         usage,
         finishReason,
         providerMeta: { model },
@@ -249,7 +291,6 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
         const parts = candidate?.content?.parts ?? [];
         if (candidate?.finishReason) rawFinishReason = candidate.finishReason;
         for (const part of parts) {
-          if (part.text) yield { type: "text", delta: part.text };
           if (part.functionCall) {
             const callId = `${requestId}-${toolCounter++}`;
             yield { type: "tool_start", callId, name: part.functionCall.name };
@@ -258,7 +299,13 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
               callId,
               name: part.functionCall.name,
               args: part.functionCall.args ?? {},
+              ...signatureOf(part),
             };
+          } else if (part.thought) {
+            yield { type: "thinking", delta: part.text ?? "", ...signatureOf(part) };
+          } else if (part.text || part.thoughtSignature !== undefined) {
+            // A signature can arrive in a part with empty text; it belongs to the current text.
+            yield { type: "text", delta: part.text ?? "", ...signatureOf(part) };
           }
         }
         // usageMetadata is cumulative; it is reported once at the end so text blocks stay intact.

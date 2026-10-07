@@ -1,0 +1,6 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Need the ","thought":true}]}}]}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"weather.","thought":true}]}}]}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"weather","args":{"city":"Ulm"}},"thoughtSignature":"fc-sig-1"},{"functionCall":{"name":"weather","args":{"city":"Bonn"}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":4,"thoughtsTokenCount":6}}
+
