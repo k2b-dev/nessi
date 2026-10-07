@@ -1343,7 +1343,19 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         ): AsyncGenerator<OutboundEvent> {
           const message = makePartialMessage(reason);
           const usage = turnUsageReported ? turnUsage : undefined;
-          if (persist && message.content.length > 0) await store.append(message);
+          // Storage or credit failures are reported but must not keep the turn open.
+          const reportFailure = function* (what: string, error: unknown): Generator<OutboundEvent> {
+            const issue = runtimeIssue(new Error(`${what}: ${toErrorMessage(error)}`));
+            recordIssue(issue, turnIssues);
+            yield issueEvent(issue, turnCtx);
+          };
+          if (persist && message.content.length > 0) {
+            try {
+              await store.append(message);
+            } catch (error) {
+              yield* reportFailure("Storing the partial assistant message failed", error);
+            }
+          }
           if (message.content.length > 0 || usage) {
             recordAssistantTurn(
               message,
@@ -1353,7 +1365,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
               turnIssues.toolIssues,
             );
           }
-          if (creditStore && usage?.creditsUsed && usage.creditsUsed > 0) await creditStore.deduct(usage.creditsUsed);
+          if (creditStore && usage?.creditsUsed && usage.creditsUsed > 0) {
+            try {
+              await creditStore.deduct(usage.creditsUsed);
+            } catch (error) {
+              yield* reportFailure("Deducting credits failed", error);
+            }
+          }
           yield { type: "turn_end", agentId, loopId, ...turnCtx, message };
         };
 
@@ -1525,6 +1543,23 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           await creditStore.deduct(turnUsage.creditsUsed);
         }
 
+        // The provider stopped the answer itself (content filter, safety, malformed call): its
+        // tool calls are not executed and the loop ends with an error.
+        if (stopReason === "error") {
+          const issue: NessiIssue = {
+            kind: "provider_error",
+            message: `${provider.name} stopped the response early (finish reason "error").`,
+            retryable: false,
+          };
+          recordIssue(issue, turnIssues);
+          const recordedTurn = loopTurns[loopTurns.length - 1];
+          if (recordedTurn?.message === assistantMessage) recordedTurn.issues = turnIssues.issues.map((item) => ({ ...item }));
+          yield issueEvent(issue, turnCtx);
+          yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+          yield loopEndEvent("error");
+          return;
+        }
+
         if (toolCalls.length === 0) {
           yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
           const lateSteeringApplied = yield* applyPendingSteering();
@@ -1544,16 +1579,22 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         };
 
         let terminalToolCompleted = false;
-        for (const tc of toolCalls) {
-          yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
-          const aggregateToolCall = aggregateToolCallMap.get(tc.id);
-          const isTerminalTool = Boolean(
-            (toolSnapshot.toolMap.get(tc.name)?.def as { terminal?: boolean } | undefined)?.terminal,
-          );
-          if (isTerminalTool && aggregateToolCall && !aggregateToolCall.isError) {
-            terminalToolCompleted = true;
-            break;
+        try {
+          for (const tc of toolCalls) {
+            yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
+            const aggregateToolCall = aggregateToolCallMap.get(tc.id);
+            const isTerminalTool = Boolean(
+              (toolSnapshot.toolMap.get(tc.name)?.def as { terminal?: boolean } | undefined)?.terminal,
+            );
+            if (isTerminalTool && aggregateToolCall && !aggregateToolCall.isError) {
+              terminalToolCompleted = true;
+              break;
+            }
           }
+        } catch (error) {
+          // The turn is already stored and counted; an abort during its tools only closes it.
+          if (signal.aborted) yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+          throw error;
         }
 
         const recordedTurn = loopTurns[loopTurns.length - 1];

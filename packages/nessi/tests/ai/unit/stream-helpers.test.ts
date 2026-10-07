@@ -37,10 +37,13 @@ describe("openSSEStream", () => {
   });
 
   it("recognizes browser and server runtimes", () => {
-    expect(isBrowserRuntime({})).toBe(true);
-    expect(isBrowserRuntime({ process: { versions: { node: "24.0.0" } } })).toBe(false);
-    expect(isBrowserRuntime({ Bun: {} })).toBe(false);
-    expect(isBrowserRuntime({ Deno: {} })).toBe(false);
+    const browser = { navigator: { userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/140" } };
+    expect(isBrowserRuntime(browser)).toBe(true);
+    expect(isBrowserRuntime({})).toBe(false);
+    expect(isBrowserRuntime({ navigator: { userAgent: "Cloudflare-Workers" }, process: {} })).toBe(false);
+    expect(isBrowserRuntime({ ...browser, process: { versions: { node: "24.0.0" } } })).toBe(false);
+    expect(isBrowserRuntime({ ...browser, Bun: {} })).toBe(false);
+    expect(isBrowserRuntime({ ...browser, Deno: {} })).toBe(false);
     expect(isBrowserRuntime()).toBe(false);
   });
 

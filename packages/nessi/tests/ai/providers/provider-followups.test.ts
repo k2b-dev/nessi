@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { gemini, ollama } from "../../../src/ai/index.js";
+import { anthropic, gemini, ollama } from "../../../src/ai/index.js";
 import { jsonResponse, stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
@@ -47,5 +47,13 @@ describe("provider follow-ups", () => {
 
     expect(idOf(first.message)).toMatch(/^ollama-[A-Za-z0-9]{8}-0$/);
     expect(idOf(first.message)).not.toBe(idOf(second.message));
+  });
+
+  it("gives Anthropic tool calls without an id a fallback id in complete()", async () => {
+    stubFetch(async () => jsonResponse({ content: [{ type: "tool_use", name: "lookup", input: {} }], stop_reason: "tool_use" }));
+
+    const { message } = await anthropic("claude", { apiKey: "k" }).complete({ messages: [] });
+
+    expect(message.content[0]).toMatchObject({ type: "tool_call", name: "lookup", id: expect.stringMatching(/^anthropic-[A-Za-z0-9]{8}-0$/) });
   });
 });

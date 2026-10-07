@@ -7,11 +7,22 @@ type SSEStreamResult =
   | { ok: true; events: AsyncGenerator<SSEEvent> }
   | { ok: false; error: Extract<RawStreamEvent, { type: "error" | "timeout" }> };
 
-type RuntimeGlobals = { process?: { versions?: { node?: string } }; Bun?: unknown; Deno?: unknown };
+type RuntimeGlobals = {
+  navigator?: { userAgent?: string };
+  process?: { versions?: { node?: string } };
+  Bun?: unknown;
+  Deno?: unknown;
+};
 
-/** True outside Node, Bun and Deno, i.e. in browsers and web workers. */
+/**
+ * True in browsers and their web workers, whose user agents start with "Mozilla/". Node, Bun,
+ * Deno and edge runtimes such as Cloudflare Workers report their own names.
+ */
 export const isBrowserRuntime = (runtime: RuntimeGlobals = globalThis as RuntimeGlobals) =>
-  runtime.process?.versions?.node === undefined && runtime.Bun === undefined && runtime.Deno === undefined;
+  /^Mozilla\//.test(runtime.navigator?.userAgent ?? "")
+  && runtime.process?.versions?.node === undefined
+  && runtime.Bun === undefined
+  && runtime.Deno === undefined;
 
 export const openSSEStream = async (
   url: string,

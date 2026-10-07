@@ -289,4 +289,78 @@ describe("nessi loop lifecycle", () => {
       .toEqual(["turn_start", "turn_end", "loop_end"]);
     expect(events.at(-1)).toMatchObject({ reason: "aborted" });
   });
+
+  it("does not run tools when the provider stopped the answer with an error", async () => {
+    let executed = false;
+    const lookup = defineTool({ name: "lookup", description: "Lookup", inputSchema: z.object({}) })
+      .server(async () => { executed = true; return "x"; });
+
+    const events = await collect(nessi({
+      provider: mockProvider([
+        { type: "tool_start", callId: "c1", name: "lookup" },
+        { type: "tool_call", callId: "c1", name: "lookup", args: {} },
+        { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "error" },
+      ]),
+      store: memoryStore(),
+      systemPrompt: "sys",
+      input: "go",
+      tools: [lookup],
+    }));
+
+    expect(executed).toBe(false);
+    expect(events.map((event) => event.type).filter((type) => type === "issue" || type.startsWith("turn_") || type === "loop_end"))
+      .toEqual(["turn_start", "issue", "turn_end", "loop_end"]);
+    expect(events.at(-1)).toMatchObject({ reason: "error" });
+  });
+
+  it("closes a normal turn when it is aborted while a tool runs", async () => {
+    const waiting = defineTool({ name: "waiting", description: "Waits", inputSchema: z.object({}) })
+      .server(() => new Promise(() => {}));
+    const loop = nessi({
+      provider: mockProvider(toolCallTurn("waiting")),
+      store: memoryStore(),
+      systemPrompt: "sys",
+      input: "go",
+      tools: [waiting],
+    });
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
+      if (event.type === "tool_execution_start") setTimeout(() => loop.abort(), 5);
+    }
+
+    expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
+      .toEqual(["turn_start", "turn_end", "loop_end"]);
+    expect(events.at(-1)).toMatchObject({ reason: "aborted", aggregate: { assistantMessageCount: 1 } });
+  });
+
+  it("still closes a failed turn when storing its partial message fails", async () => {
+    const store = memoryStore();
+    let appends = 0;
+    const failingStore = {
+      load: () => store.load(),
+      append: async (...args: Parameters<typeof store.append>) => {
+        appends++;
+        if (appends > 1) throw new Error("disk full");
+        await store.append(...args);
+      },
+    };
+
+    const events = await collect(nessi({
+      provider: mockProvider([
+        { type: "text", delta: "partial" },
+        { type: "usage", usage: { input: 3, output: 2, total: 5 } },
+        { type: "error", error: "boom", retryable: true },
+      ]),
+      store: failingStore,
+      systemPrompt: "sys",
+      input: "go",
+    }));
+
+    expect(events.some((event) => event.type === "issue"
+      && event.issue.message.includes("Storing the partial assistant message failed: disk full"))).toBe(true);
+    expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
+      .toEqual(["turn_start", "turn_end", "loop_end"]);
+    expect(events.at(-1)).toMatchObject({ reason: "error", aggregate: { usage: { total: 5 } } });
+  });
 });

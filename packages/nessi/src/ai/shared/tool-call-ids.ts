@@ -45,7 +45,7 @@ const createStrictToolCallIdFactory = () => {
  */
 const fallbackToolCallPrefix = (label: string) => {
   const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
-    ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+    ?? `${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
   return `${label}-${random.slice(0, 8)}`;
 };
 

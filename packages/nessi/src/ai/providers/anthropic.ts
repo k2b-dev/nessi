@@ -43,7 +43,7 @@ type AnthropicResponse = {
     | { type: "thinking"; thinking?: string; signature?: string }
     | { type: "redacted_thinking"; data?: string }
     | { type: "text"; text?: string }
-    | { type: "tool_use"; id: string; name: string; input?: Record<string, unknown> }
+    | { type: "tool_use"; id?: string; name: string; input?: Record<string, unknown> }
   >;
   stop_reason?: string | null;
   usage?: {
@@ -278,6 +278,8 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const payload = safeJsonParse<AnthropicResponse>(await response.text());
       if (!payload) throw new Error("anthropic returned invalid JSON.");
       const content: AssistantContentBlock[] = [];
+      const idPrefix = fallbackToolCallPrefix("anthropic");
+      let toolIndex = 0;
       for (const block of payload.content ?? []) {
         if (block.type === "thinking") {
           appendAssistantContentBlock(content, {
@@ -290,7 +292,8 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         } else if (block.type === "text") {
           appendAssistantContentBlock(content, { type: "text", text: block.text ?? "" });
         } else if (block.type === "tool_use") {
-          content.push({ type: "tool_call", id: block.id, name: block.name, args: block.input ?? {} });
+          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args: block.input ?? {} });
+          toolIndex++;
         }
       }
       const usage = usageFromValue(payload.usage, options);
