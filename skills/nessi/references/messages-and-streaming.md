@@ -142,6 +142,8 @@ Event meanings:
 - `issue`: structured provider, timeout, malformed/cancelled tool-stream, tool-execution, or runtime problem.
 - `usage`: token usage, sometimes with final `finishReason`.
 
+Every `turn_start` gets a matching `turn_end`, including failed or aborted turns, whose message has `stopReason` `"error"` or `"interrupted"`. Usage reported before a failure still counts in the aggregate and credits.
+
 Root `nessi()` loops forward provider block events and add `loopId`, `turnId`, and `turnIndex`:
 
 ```ts

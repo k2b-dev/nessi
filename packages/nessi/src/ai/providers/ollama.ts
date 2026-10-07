@@ -1,3 +1,4 @@
+import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
@@ -104,10 +105,10 @@ const usageFromResponse = (response: OllamaResponse, options?: OllamaOptions) =>
     options?.creditsPerOutputToken,
   );
 
-const toolCallsFromResponse = (response: OllamaResponse): ToolCallBlock[] =>
+const toolCallsFromResponse = (response: OllamaResponse, idPrefix = fallbackToolCallPrefix("ollama")): ToolCallBlock[] =>
   (response.message?.tool_calls ?? []).map((toolCall, index) => ({
     type: "tool_call",
-    id: `ollama-${index}`,
+    id: `${idPrefix}-${index}`,
     name: toolCall.function.name,
     args: toolCall.function.arguments,
   }));
@@ -117,6 +118,9 @@ const generationOptions = (request: GenerateRequest, options?: OllamaOptions) =>
   const temperature = request.temperature ?? options?.temperature;
   if (temperature !== undefined) result.temperature = temperature;
   if (request.maxOutputTokens !== undefined) result.num_predict = request.maxOutputTokens;
+  // Ollama's own default context depends on the server's memory; an explicit contextWindow is
+  // sent so Ollama and Nessi's compaction agree on the same size.
+  if (options?.contextWindow !== undefined) result.num_ctx = options.contextWindow;
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
@@ -282,6 +286,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       }
 
       let toolCounter = 0;
+      const idPrefix = fallbackToolCallPrefix("ollama");
       let sawDone = false;
       const streamTimeouts = options?.timeouts ? { ...options.timeouts } : undefined;
       if (firstByteDeadline && streamTimeouts) {
@@ -297,7 +302,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           if (chunk.message?.thinking) yield { type: "thinking", delta: chunk.message.thinking };
           if (chunk.message?.content) yield { type: "text", delta: chunk.message.content };
           for (const toolCall of chunk.message?.tool_calls ?? []) {
-            const callId = `ollama-${toolCounter++}`;
+            const callId = `${idPrefix}-${toolCounter++}`;
             yield { type: "tool_start", callId, name: toolCall.function.name };
             yield {
               type: "tool_call",

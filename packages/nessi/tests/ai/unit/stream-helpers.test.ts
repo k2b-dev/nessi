@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openSSEStream } from "../../../src/ai/shared/stream-helpers.js";
+import { isBrowserRuntime, openSSEStream } from "../../../src/ai/shared/stream-helpers.js";
 import { stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
@@ -24,14 +24,24 @@ describe("openSSEStream", () => {
     expect(!result.ok && result.error.type === "error" ? result.error.contextOverflow : "missing").toBeUndefined();
   });
 
-  it("keeps the browser network-error heuristic for large requests", async () => {
+  it("keeps the network-error overflow guess to browsers", async () => {
     stubFetch(async () => {
       throw new TypeError("Failed to fetch");
     });
 
+    // Bun reports refused connections as TypeError too; there it stays a retryable connection error.
     const result = await openSSEStream("https://example.com", {}, largeBody, "custom", undefined, 1_000);
 
-    expect(!result.ok && result.error.type === "error" ? result.error.contextOverflow : undefined).toBe(true);
+    expect(!result.ok && result.error.type === "error" ? result.error.retryable : undefined).toBe(true);
+    expect(!result.ok && result.error.type === "error" ? result.error.contextOverflow : "missing").toBeUndefined();
+  });
+
+  it("recognizes browser and server runtimes", () => {
+    expect(isBrowserRuntime({})).toBe(true);
+    expect(isBrowserRuntime({ process: { versions: { node: "24.0.0" } } })).toBe(false);
+    expect(isBrowserRuntime({ Bun: {} })).toBe(false);
+    expect(isBrowserRuntime({ Deno: {} })).toBe(false);
+    expect(isBrowserRuntime()).toBe(false);
   });
 
   it("does not classify other connection failures as context overflow", async () => {

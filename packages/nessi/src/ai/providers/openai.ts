@@ -8,6 +8,7 @@ export type OpenAIOptions = ProviderRequestDefaults & {
   temperature?: number;
   creditsPerInputToken?: number;
   creditsPerOutputToken?: number;
+  /** "auto" (default) and "never" keep OpenAI's IDs; "strict9" maps them to 9-character IDs. */
   normalizeToolCallIds?: "auto" | "never" | "strict9";
   timeouts?: ProviderTimeouts;
 };

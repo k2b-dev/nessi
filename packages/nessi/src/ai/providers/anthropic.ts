@@ -1,3 +1,4 @@
+import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import {
   appendAssistantContentBlock,
@@ -344,6 +345,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       let sawToolCall = false;
       let sawMessageStop = false;
       const thinkingSignatures = new Map<number, string>();
+      const idPrefix = fallbackToolCallPrefix("anthropic");
 
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
@@ -374,20 +376,20 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           const startInput = payload.content_block.input;
           const argsBuffer = startInput && Object.keys(startInput).length > 0 ? JSON.stringify(startInput) : "";
           toolBuffers.set(index, {
-            callId: payload.content_block.id ?? `anthropic-${index}`,
+            callId: payload.content_block.id ?? `${idPrefix}-${index}`,
             name: payload.content_block.name ?? "",
             argsBuffer,
           });
           sawToolCall = true;
           yield {
             type: "tool_start",
-            callId: payload.content_block.id ?? `anthropic-${index}`,
+            callId: payload.content_block.id ?? `${idPrefix}-${index}`,
             name: payload.content_block.name ?? "",
           };
           if (argsBuffer) {
             yield {
               type: "tool_delta",
-              callId: payload.content_block.id ?? `anthropic-${index}`,
+              callId: payload.content_block.id ?? `${idPrefix}-${index}`,
               argsDelta: argsBuffer,
             };
           }

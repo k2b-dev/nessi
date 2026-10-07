@@ -1176,9 +1176,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
     const turnIssues = { issues: [] as LoopIssueAggregate[], toolIssues: [] as LoopToolIssueAggregate[] };
     yield { type: "turn_start", agentId, loopId, ...turnCtx, resumed: true };
-    for (const tc of pending) {
-      if (signal.aborted) return;
-      yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
+    try {
+      for (const tc of pending) {
+        if (signal.aborted) break;
+        yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
+      }
+    } catch (error) {
+      // An abort while a resumed call runs still closes the turn.
+      if (signal.aborted) yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+      throw error;
     }
     if (aggregateTurn && turnIssues.issues.length > 0) {
       aggregateTurn.issues = [...(aggregateTurn.issues ?? []), ...turnIssues.issues.map((issue) => ({ ...issue }))];
@@ -1327,6 +1333,30 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return buildAssistantMessageFromContent(provider.model, content, turnUsage, reason, provider.name);
         };
 
+        /**
+         * Ends a turn that did not complete normally: emits turn_end, counts usage the provider
+         * already reported (aggregate and credits) and optionally keeps partial content in history.
+         */
+        const closeUnfinishedTurn = async function* (
+          reason: "interrupted" | "error",
+          persist: boolean,
+        ): AsyncGenerator<OutboundEvent> {
+          const message = makePartialMessage(reason);
+          const usage = turnUsageReported ? turnUsage : undefined;
+          if (persist && message.content.length > 0) await store.append(message);
+          if (message.content.length > 0 || usage) {
+            recordAssistantTurn(
+              message,
+              usage,
+              toolCalls.map((toolCall) => ({ callId: toolCall.id, name: toolCall.name, args: toolCall.args })),
+              turnIssues.issues,
+              turnIssues.toolIssues,
+            );
+          }
+          if (creditStore && usage?.creditsUsed && usage.creditsUsed > 0) await creditStore.deduct(usage.creditsUsed);
+          yield { type: "turn_end", agentId, loopId, ...turnCtx, message };
+        };
+
         try {
           const providerIterator = provider.stream({
             systemPrompt,
@@ -1415,29 +1445,21 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           }
         } catch (error) {
           if (signal.aborted) {
-            const msg = makePartialMessage("interrupted");
-            if (msg.content.length > 0) {
-              await store.append(msg);
-              recordAssistantTurn(
-                msg,
-                turnUsageReported ? turnUsage : undefined,
-                toolCalls.map((toolCall) => ({ callId: toolCall.id, name: toolCall.name, args: toolCall.args })),
-                turnIssues.issues,
-                turnIssues.toolIssues,
-              );
-              yield { type: "turn_end", agentId, loopId, ...turnCtx, message: msg };
-            }
+            yield* closeUnfinishedTurn("interrupted", true);
             yield loopEndEvent("aborted");
             return;
           }
           const issue = runtimeIssue(error);
           recordIssue(issue, turnIssues);
           yield issueEvent(issue, turnCtx);
+          yield* closeUnfinishedTurn("error", true);
           yield loopEndEvent("error");
           return;
         }
 
         if (hadContextOverflow) {
+          // The attempt is not kept in history: compaction retries it, or the loop ends.
+          yield* closeUnfinishedTurn("error", false);
           if (compact && !compactionRetried) {
             const estimatedFillRatio = computeFillRatio(messages);
             const fillRatio = typeof overflowRatio === "number"
@@ -1465,23 +1487,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         }
 
         if (providerFailure) {
+          yield* closeUnfinishedTurn("error", true);
           yield loopEndEvent("error");
           return;
         }
 
         if (signal.aborted) {
-          const msg = makePartialMessage("interrupted");
-          if (msg.content.length > 0) {
-            await store.append(msg);
-            recordAssistantTurn(
-              msg,
-              turnUsageReported ? turnUsage : undefined,
-              toolCalls.map((toolCall) => ({ callId: toolCall.id, name: toolCall.name, args: toolCall.args })),
-              turnIssues.issues,
-              turnIssues.toolIssues,
-            );
-            yield { type: "turn_end", agentId, loopId, ...turnCtx, message: msg };
-          }
+          yield* closeUnfinishedTurn("interrupted", true);
           yield loopEndEvent("aborted");
           return;
         }

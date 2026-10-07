@@ -4,7 +4,7 @@ import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
-import { createStrictToolCallIdFactory } from "../shared/tool-call-ids.js";
+import { createStrictToolCallIdFactory, fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
 import { toOpenAITools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
 import type {
@@ -232,9 +232,10 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
       if (text) thinking.push({ type: "thinking", thinking: text });
     }
   }
+  const idPrefix = fallbackToolCallPrefix(config.name);
   const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => ({
     type: "tool_call",
-    id: call.id ?? `${config.name}-${index}`,
+    id: call.id ?? `${idPrefix}-${index}`,
     name: call.function?.name ?? "",
     args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
   }));
@@ -381,6 +382,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       const pendingToolCalls: ToolBuffer[] = [];
       let latestUsage: Usage | undefined;
       let latestFinishReason: AssistantStopReason | undefined;
+      const idPrefix = fallbackToolCallPrefix(config.name);
       let sawDone = false;
       // Reasoning items arrive in pieces keyed by `index`, sometimes with the signature after the
       // answer started; they are completed over the whole stream and attached once at the end.
@@ -477,7 +479,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
             // Some servers reuse one index for parallel calls; a new id starts a new call.
             const existing = current && (!toolCall.id || toolCall.id === current.callId) ? current : undefined;
             if (!existing) {
-              const callId = toolCall.id ?? `${config.name}-${toolCall.index}`;
+              const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
               const argsDelta = toolCall.function?.arguments ?? "";
               const buffer = {

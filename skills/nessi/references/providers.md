@@ -265,6 +265,8 @@ const provider = ollama("llama3.1", {
 
 Ollama is useful for local development and offline workflows. It streams NDJSON internally, but consumers still receive normalized `StreamEvent` values. It supports the same `timeouts.firstByteMs` and `timeouts.idleMs` streaming controls.
 
+Ollama's default context depends on the server's memory (4k to 256k). Set `contextWindow` to the size you want; Nessi then sends it as `options.num_ctx`, so Ollama and compaction use the same window. Without it, Nessi assumes 128k and sends nothing.
+
 ## Anthropic
 
 ```ts

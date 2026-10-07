@@ -154,6 +154,8 @@ const signatureOf = (part: GeminiPart) => (part.thoughtSignature !== undefined ?
 
 const mapFinishReason = (reason: string | undefined, hasTools: boolean) => {
   if (reason === "MAX_TOKENS") return "max_tokens" as const;
+  // SAFETY, RECITATION, MALFORMED_FUNCTION_CALL and similar reasons mean the answer was cut off.
+  if (reason && reason !== "STOP" && reason !== "FINISH_REASON_UNSPECIFIED") return "error" as const;
   if (hasTools) return "tool_use" as const;
   return "stop" as const;
 };

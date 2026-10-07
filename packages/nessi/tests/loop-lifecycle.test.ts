@@ -3,7 +3,7 @@ import { z } from "zod";
 import { nessi } from "../src/nessi.js";
 import { defineTool } from "../src/tools.js";
 import { memoryStore } from "../src/stores.js";
-import { mockProvider } from "./mock-provider.js";
+import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
 import type { OutboundEvent, Provider } from "../src/types.js";
 
 const collect = async (loop: ReturnType<typeof nessi>) => {
@@ -216,5 +216,77 @@ describe("nessi loop lifecycle", () => {
 
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "aborted" });
     expect(await store.load()).toHaveLength(0);
+  });
+
+  it("closes a failed turn, keeps its partial answer and counts its usage", async () => {
+    const store = memoryStore();
+    let deducted = 0;
+    const events = await collect(nessi({
+      provider: mockProvider([
+        { type: "text", delta: "Half an ans" },
+        { type: "usage", usage: { input: 10, output: 4, total: 14, creditsUsed: 2 } },
+        { type: "error", error: "connection reset", retryable: true },
+      ]),
+      store,
+      systemPrompt: "sys",
+      input: "go",
+      creditStore: { remaining: async () => 100, deduct: async (credits) => { deducted += credits; } },
+    }));
+
+    expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
+      .toEqual(["turn_start", "turn_end", "loop_end"]);
+    const turnEnd = events.find((event) => event.type === "turn_end") as Extract<OutboundEvent, { type: "turn_end" }>;
+    expect(turnEnd.message).toMatchObject({ stopReason: "error", content: [{ type: "text", text: "Half an ans" }] });
+    const end = events.at(-1) as Extract<OutboundEvent, { type: "loop_end" }>;
+    expect(end).toMatchObject({ reason: "error", aggregate: { usage: { input: 10, output: 4, total: 14 } } });
+    expect(deducted).toBe(2);
+    const stored = (await store.load()).map((entry) => entry.message);
+    expect(stored.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
+  });
+
+  it("closes the overflowing attempt before a compaction retry and does not store it", async () => {
+    const store = memoryStore();
+    const provider = mockProviderMultiTurn((_request, callIndex) => callIndex === 0
+      ? [{ type: "error", error: "context too long", retryable: false, contextOverflow: true }]
+      : [{ type: "text", delta: "Done." }, { type: "usage", usage: { input: 1, output: 1, total: 2 } }]);
+
+    const events = await collect(nessi({
+      provider,
+      store,
+      systemPrompt: "sys",
+      input: "go",
+      compact: () => Promise.resolve(),
+    }));
+
+    const turnEvents = events.filter((event) => event.type === "turn_start" || event.type === "turn_end");
+    expect(turnEvents.map((event) => event.type)).toEqual(["turn_start", "turn_end", "turn_start", "turn_end"]);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "stop" });
+    const assistants = (await store.load()).filter((entry) => entry.message.role === "assistant");
+    expect(assistants).toHaveLength(1);
+  });
+
+  it("closes a resumed turn when it is aborted during a pending call", async () => {
+    const store = memoryStore();
+    await store.append({ role: "user", content: [{ type: "text", text: "go" }] });
+    await store.append({
+      role: "assistant",
+      content: [
+        { type: "tool_call", id: "c1", name: "waiting", args: {} },
+        { type: "tool_call", id: "c2", name: "waiting", args: {} },
+      ],
+    });
+    const waiting = defineTool({ name: "waiting", description: "Waits", inputSchema: z.object({}) })
+      .server(() => new Promise(() => {}));
+
+    const loop = nessi({ provider: mockProvider([]), store, systemPrompt: "sys", tools: [waiting] });
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
+      if (event.type === "tool_execution_start") setTimeout(() => loop.abort(), 5);
+    }
+
+    expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
+      .toEqual(["turn_start", "turn_end", "loop_end"]);
+    expect(events.at(-1)).toMatchObject({ reason: "aborted" });
   });
 });

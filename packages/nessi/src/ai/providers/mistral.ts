@@ -8,7 +8,7 @@ import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
-import { createStrictToolCallIdFactory } from "../shared/tool-call-ids.js";
+import { createStrictToolCallIdFactory, fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
 import { toOpenAITools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
 import type {
@@ -279,9 +279,10 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const payload = safeJsonParse<MistralChunk>(await response.text());
       if (!payload) throw new Error("mistral returned invalid JSON.");
       const choice = payload.choices?.[0];
+      const idPrefix = fallbackToolCallPrefix("mistral");
       const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => ({
         type: "tool_call",
-        id: call.id ?? `mistral-${index}`,
+        id: call.id ?? `${idPrefix}-${index}`,
         name: call.function?.name ?? "",
         args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
       }));
@@ -337,6 +338,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const pendingToolCalls: ToolBuffer[] = [];
       let latestUsage: Usage | undefined;
       let latestFinishReason: GenerateResult["finishReason"] | undefined;
+      const idPrefix = fallbackToolCallPrefix("mistral");
       let sawDone = false;
       const startToolCall = function* (buffer: ToolBuffer) {
         if (buffer.started || !buffer.name.trim()) return;
@@ -393,7 +395,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
             // Some servers reuse one index for parallel calls; a new id starts a new call.
             const existing = current && (!toolCall.id || toolCall.id === current.callId) ? current : undefined;
             if (!existing) {
-              const callId = toolCall.id ?? `mistral-${toolCall.index}`;
+              const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
               const argsDelta = toolCall.function?.arguments ?? "";
               const buffer = {

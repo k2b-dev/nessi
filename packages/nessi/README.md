@@ -62,7 +62,12 @@ for await (const event of loop) {
 
 Every outbound event from one `nessi()` run carries the same `loopId`. Pass your own `loopId` to align events with a persisted request or UI response group, or let Nessi generate one when omitted.
 
-`turn_end` reports each internal provider turn. The final `loop_end` event includes `aggregate`, which groups assistant turns, executable tool calls, tool results, validation/execution errors, malformed or cancelled tool streams, summed usage, and timing for the complete logical loop. `aggregate.timing.totalElapsedMs` is model generation plus active tool execution; approval/client-tool waits are tracked separately as `aggregate.timing.actionWaitMs`. Helper exports such as `mergeUsage()`, `cloneLoopAggregate()`, and `mergeLoopAggregates()` are available from `@k2b/nessi`.
+`turn_end` reports each internal provider turn and closes every `turn_start`,
+also when a turn fails or is aborted. Such a turn carries the partial message
+with `stopReason` `"error"` or `"interrupted"`; usage the provider already
+reported counts in the aggregate and against the credit store. Partial content
+of failed and aborted turns is stored, except for a context overflow, which is
+retried after compaction or ends the loop. The final `loop_end` event includes `aggregate`, which groups assistant turns, executable tool calls, tool results, validation/execution errors, malformed or cancelled tool streams, summed usage, and timing for the complete logical loop. `aggregate.timing.totalElapsedMs` is model generation plus active tool execution; approval/client-tool waits are tracked separately as `aggregate.timing.actionWaitMs`. Helper exports such as `mergeUsage()`, `cloneLoopAggregate()`, and `mergeLoopAggregates()` are available from `@k2b/nessi`.
 
 ## Dynamic tools
 

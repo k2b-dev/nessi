@@ -7,6 +7,12 @@ type SSEStreamResult =
   | { ok: true; events: AsyncGenerator<SSEEvent> }
   | { ok: false; error: Extract<RawStreamEvent, { type: "error" | "timeout" }> };
 
+type RuntimeGlobals = { process?: { versions?: { node?: string } }; Bun?: unknown; Deno?: unknown };
+
+/** True outside Node, Bun and Deno, i.e. in browsers and web workers. */
+export const isBrowserRuntime = (runtime: RuntimeGlobals = globalThis as RuntimeGlobals) =>
+  runtime.process?.versions?.node === undefined && runtime.Bun === undefined && runtime.Deno === undefined;
+
 export const openSSEStream = async (
   url: string,
   headers: Record<string, string>,
@@ -58,9 +64,11 @@ export const openSSEStream = async (
     // Heuristic: if the request body is large relative to the context window,
     // a network error likely means the server rejected it for context overflow
     // (browsers hide the actual HTTP 400 body behind CORS on error responses).
-    // Browsers surface that as a TypeError; aborts never count.
+    // Browsers surface that as a TypeError; aborts never count. Server runtimes report refused
+    // connections as a TypeError too, so the guess only applies in browsers.
     const estimatedTokens = serializedBody.length / 4;
     const isLikelyOverflow = !controller.signal.aborted
+      && isBrowserRuntime()
       && error instanceof TypeError
       && typeof contextWindow === "number"
       && contextWindow > 0

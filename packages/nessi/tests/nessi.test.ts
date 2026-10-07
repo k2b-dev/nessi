@@ -1341,9 +1341,12 @@ describe("nessi core loop", () => {
 
     const events = await collectEvents(loop);
 
-    expect(events.some((event) => event.type === "turn_end")).toBe(false);
+    // The turn is closed, but nothing empty is stored; the reported usage still counts.
+    const turnEnd = events.find((event) => event.type === "turn_end") as Extract<OutboundEvent, { type: "turn_end" }>;
+    expect(turnEnd.message).toMatchObject({ content: [], stopReason: "interrupted" });
     const done = events.find((event) => event.type === "loop_end") as Extract<OutboundEvent, { type: "loop_end" }>;
     expect(done.reason).toBe("aborted");
+    expect(done.aggregate.usage).toMatchObject({ input: 10, output: 0, total: 10 });
 
     const entries = await store.load();
     expect(entries.filter((entry) => entry.message.role === "assistant")).toHaveLength(0);
@@ -1900,7 +1903,7 @@ describe("nessi core loop", () => {
     expect(done.aggregate?.usage).toBeUndefined();
   });
 
-  it("provider error (retryable) still terminates turn without empty assistant message", async () => {
+  it("provider error (retryable) closes the turn without storing an empty assistant message", async () => {
     const store = memoryStore();
     const events = await collectEvents(
       nessi({
@@ -1912,8 +1915,8 @@ describe("nessi core loop", () => {
     );
 
     const types = events.map((e) => e.type);
-    expect(types).toContain("issue");
-    expect(types).not.toContain("turn_end");
+    expect(types).toEqual(["loop_start", "turn_start", "issue", "turn_end", "loop_end"]);
+    expect((events.find((e) => e.type === "turn_end") as any).message.stopReason).toBe("error");
     const done = events.find((e) => e.type === "loop_end") as any;
     expect(done.reason).toBe("error");
 

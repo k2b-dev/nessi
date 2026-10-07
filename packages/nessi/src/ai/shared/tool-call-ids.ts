@@ -39,4 +39,14 @@ const createStrictToolCallIdFactory = () => {
   };
 };
 
-export { ALNUM, hash32, encodeBase62, createStrictToolCallIdFactory };
+/**
+ * Prefix for tool call IDs that a provider did not supply. It is unique per response, so
+ * fallback IDs such as `ollama-<prefix>-0` never repeat across turns of a conversation.
+ */
+const fallbackToolCallPrefix = (label: string) => {
+  const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+    ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return `${label}-${random.slice(0, 8)}`;
+};
+
+export { ALNUM, hash32, encodeBase62, createStrictToolCallIdFactory, fallbackToolCallPrefix };
