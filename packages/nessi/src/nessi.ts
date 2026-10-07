@@ -1322,7 +1322,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
                 : { type: "text", text: block.text },
             );
           for (const block of pendingBlocks) appendAssistantContentBlock(content, block);
-          return buildAssistantMessageFromContent(provider.model, content, turnUsage, reason);
+          return buildAssistantMessageFromContent(provider.model, content, turnUsage, reason, provider.name);
         };
 
         try {
@@ -1482,7 +1482,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return;
         }
 
-        const assistantMessage = buildAssistantMessageFromContent(provider.model, assistantBlocks, turnUsage, stopReason);
+        const assistantMessage = buildAssistantMessageFromContent(
+          provider.model,
+          assistantBlocks,
+          turnUsage,
+          stopReason,
+          provider.name,
+        );
         await store.append(assistantMessage);
         lastUsage = turnUsage;
 

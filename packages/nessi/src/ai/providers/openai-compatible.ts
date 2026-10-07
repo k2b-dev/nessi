@@ -224,7 +224,7 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
 
   return {
-    message: buildAssistantMessage(config.model, content ?? "", "", toolCalls, usage, finishReason),
+    message: buildAssistantMessage(config.model, content ?? "", "", toolCalls, usage, finishReason, config.name),
     usage,
     finishReason,
     providerMeta: {

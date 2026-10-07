@@ -289,10 +289,23 @@ accepts is up to the model; unsupported values come back as provider errors.
 | `openai`, `vllm`, `openAICompatible()` | `reasoning_effort` |
 | `openrouter` | `reasoning: { effort }` |
 | `ollama` | `think`; `"none"` sends `false` |
+| `anthropic` | `thinking: { type: "adaptive" }` plus `output_config.effort`; `"none"` sends `thinking: { type: "disabled" }` |
 
-On vLLM, `"none"` also turns off thinking for templates such as Qwen's. Ollama
+On vLLM, `"none"` also turns off thinking for templates such as Qwen's.
+Anthropic models that cannot turn thinking off reject `"none"`; models before
+Claude 4.6 need the budget mode through
+`extraBody: { thinking: { type: "enabled", budget_tokens: 4096 } }` instead of
+`reasoningEffort`. Thinking counts against `max_tokens`, so the Anthropic
+default `maxOutputTokens` is 8192. Ollama
 models that only accept `think: true` or `false` need `extraBody: { think: true }`
 to turn thinking on.
+
+Thinking appears as `thinking` blocks. Some providers sign their reasoning or
+return it encrypted and require it back unchanged in later requests, especially
+during tool loops. Nessi keeps that data on the blocks (`signature`, `redacted`)
+and records the producing provider in `message.provider`; each provider sends
+it back only to itself. Store assistant messages as they are, including these
+fields, and keep history append-only.
 
 `disableReasoning` is deprecated. It keeps its original behavior: OpenAI-compatible
 providers send `reasoning_effort: "low"`, Gemini sets a zero thinking budget and

@@ -26,7 +26,11 @@ type OpenBlock = {
   index: number;
   kind: "text" | "thinking";
   text: string;
+  signature?: string;
+  redacted?: string;
 };
+
+type BlockData = { signature?: string; redacted?: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -76,10 +80,16 @@ function toolIssue(
   };
 }
 
-const blockFromOpen = (block: OpenBlock): AssistantContentBlock =>
-  block.kind === "thinking"
-    ? { type: "thinking", thinking: block.text }
-    : { type: "text", text: block.text };
+const blockFromOpen = (block: OpenBlock): AssistantContentBlock => {
+  const signature = block.signature !== undefined ? { signature: block.signature } : {};
+  if (block.kind === "text") return { type: "text", text: block.text, ...signature };
+  return {
+    type: "thinking",
+    thinking: block.text,
+    ...signature,
+    ...(block.redacted !== undefined ? { redacted: block.redacted } : {}),
+  };
+};
 
 const isProviderTimeoutError = (error: unknown): error is { scope: "provider_first_byte" | "provider_idle"; message: string } =>
   Boolean(error)
@@ -119,20 +129,31 @@ export async function* normalizeProviderStream(
   const appendTextBlock = function* (
     kind: "text" | "thinking",
     delta: string,
+    data: BlockData = {},
   ): Generator<StreamEvent> {
-    if (delta.length === 0) return;
-    if (!openBlock && delta.trim().length === 0) return;
+    const hasData = data.signature !== undefined || data.redacted !== undefined;
+    if (!hasData) {
+      if (delta.length === 0) return;
+      if (!openBlock && delta.trim().length === 0) return;
+    }
 
     if (openBlock?.kind !== kind) {
       yield* closeOpenBlock();
-      if (delta.trim().length === 0) return;
+      // Signed or encrypted blocks are kept even without readable text.
+      if (!hasData && delta.trim().length === 0) return;
       const index = nextBlockIndex++;
       openBlock = { blockId: `block-${index}`, index, kind, text: "" };
       yield { type: "block_start", blockId: openBlock.blockId, index, kind };
     }
 
-    openBlock.text += delta;
-    yield { type: "block_delta", blockId: openBlock.blockId, delta };
+    if (delta.length > 0) {
+      openBlock.text += delta;
+      yield { type: "block_delta", blockId: openBlock.blockId, delta };
+    }
+    if (data.signature !== undefined) openBlock.signature = data.signature;
+    if (data.redacted !== undefined) openBlock.redacted = data.redacted;
+    // A signature completes a thinking block; following reasoning belongs to a new one.
+    if (kind === "thinking" && hasData) yield* closeOpenBlock();
   };
 
   const emitToolCallBlock = function* (toolCall: ToolCallBlock): Generator<StreamEvent> {
@@ -182,7 +203,7 @@ export async function* normalizeProviderStream(
             if (options.suppressTextAfterMalformedTool) break;
           }
           if (suppressMalformedTextSpan) break;
-          yield* appendTextBlock("text", event.delta);
+          yield* appendTextBlock("text", event.delta, { signature: event.signature });
           break;
 
         case "thinking":
@@ -191,7 +212,7 @@ export async function* normalizeProviderStream(
             if (options.suppressTextAfterMalformedTool) break;
           }
           if (suppressMalformedTextSpan) break;
-          yield* appendTextBlock("thinking", event.delta);
+          yield* appendTextBlock("thinking", event.delta, { signature: event.signature, redacted: event.redacted });
           break;
 
         case "tool_start":
@@ -248,7 +269,13 @@ export async function* normalizeProviderStream(
 
           pending.delete(event.callId);
           emittedToolCallCount++;
-          yield* emitToolCallBlock({ type: "tool_call", id: event.callId, name: event.name, args: event.args });
+          yield* emitToolCallBlock({
+            type: "tool_call",
+            id: event.callId,
+            name: event.name,
+            args: event.args,
+            ...(event.signature !== undefined ? { signature: event.signature } : {}),
+          });
           break;
         }
 

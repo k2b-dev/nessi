@@ -1,5 +1,9 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
-import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
+import {
+  appendAssistantContentBlock,
+  assertOnlySupportedFiles,
+  buildAssistantMessageFromContent,
+} from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -7,6 +11,7 @@ import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toAnthropicTools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
 import type {
+  AssistantContentBlock,
   GenerateRequest,
   GenerateResult,
   Message,
@@ -15,10 +20,11 @@ import type {
   ProviderTimeouts,
   RawStreamEvent,
   StreamEvent,
-  ToolCallBlock,
 } from "../types.js";
 
 type AnthropicBlock =
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
   | { type: "text"; text: string }
   | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
@@ -33,6 +39,8 @@ type AnthropicResponse = {
   id?: string;
   model?: string;
   content?: Array<
+    | { type: "thinking"; thinking?: string; signature?: string }
+    | { type: "redacted_thinking"; data?: string }
     | { type: "text"; text?: string }
     | { type: "tool_use"; id: string; name: string; input?: Record<string, unknown> }
   >;
@@ -55,11 +63,14 @@ type AnthropicStreamEvent = {
     id?: string;
     name?: string;
     input?: Record<string, unknown>;
+    data?: string;
   };
   index?: number;
   delta?: {
     type?: string;
     text?: string;
+    thinking?: string;
+    signature?: string;
     partial_json?: string;
     stop_reason?: string | null;
   };
@@ -116,10 +127,20 @@ const convertMessages = (messages: Message[]) => {
     }
 
     if (message.role === "assistant") {
+      // Thinking goes back only to Anthropic, complete and in its original position.
+      const ownMessage = message.provider === "anthropic";
       const content: AnthropicBlock[] = [];
       for (const block of message.content) {
-        if (block.type === "text") content.push({ type: "text", text: block.text });
-        else if (block.type === "tool_call") {
+        if (block.type === "thinking") {
+          if (!ownMessage) continue;
+          if (block.redacted !== undefined) content.push({ type: "redacted_thinking", data: block.redacted });
+          else if (block.signature !== undefined) {
+            content.push({ type: "thinking", thinking: block.thinking, signature: block.signature });
+          }
+        } else if (block.type === "text") {
+          // Anthropic rejects empty text blocks.
+          if (block.text) content.push({ type: "text", text: block.text });
+        } else if (block.type === "tool_call") {
           content.push({
             type: "tool_use",
             id: block.id,
@@ -143,6 +164,23 @@ const convertMessages = (messages: Message[]) => {
     });
   }
   return out;
+};
+
+/**
+ * "none" disables thinking; other levels enable adaptive thinking and set `output_config.effort`.
+ * Models that cannot disable thinking or do not support a level answer with a 400. The
+ * deprecated `disableReasoning` stays a no-op here, as before.
+ */
+const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest, options?: AnthropicOptions) => {
+  const { effort } = resolveReasoning(request, options);
+  if (effort === undefined) return;
+  if (effort === "none") {
+    body.thinking = { type: "disabled" };
+    return;
+  }
+  body.thinking = { type: "adaptive" };
+  const outputConfig = typeof body.output_config === "object" && body.output_config !== null ? body.output_config : {};
+  body.output_config = { ...outputConfig, effort };
 };
 
 const resolveTemperature = (request: GenerateRequest, options?: AnthropicOptions) =>
@@ -187,7 +225,8 @@ const applyResponseFormat = (body: Record<string, unknown>, request: GenerateReq
 export const anthropic = (model: string, options?: AnthropicOptions): Provider => {
   const baseURL = (options?.baseURL ?? "https://api.anthropic.com").replace(/\/+$/, "");
   const apiVersion = options?.apiVersion ?? "2023-06-01";
-  const maxOutputTokens = options?.maxOutputTokens ?? 1024;
+  // Thinking counts against max_tokens and is on by default for current models.
+  const maxOutputTokens = options?.maxOutputTokens ?? 8192;
 
   return {
     name: "anthropic",
@@ -198,7 +237,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       streaming: true,
       tools: true,
       images: true,
-      thinking: false,
+      thinking: true,
       usage: true,
       structuredOutput: true,
     },
@@ -212,6 +251,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       };
       if (request.tools?.length) body.tools = toAnthropicTools(request.tools);
       applyResponseFormat(body, request);
+      applyReasoning(body, request, options);
       const temperature = resolveTemperature(request, options);
       if (temperature !== undefined) body.temperature = temperature;
 
@@ -235,23 +275,27 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
 
       const payload = safeJsonParse<AnthropicResponse>(await response.text());
       if (!payload) throw new Error("anthropic returned invalid JSON.");
-      const text = (payload.content ?? [])
-        .filter((block): block is { type: "text"; text?: string } => block.type === "text")
-        .map((block) => block.text ?? "")
-        .join("");
-      const toolCalls: ToolCallBlock[] = (payload.content ?? [])
-        .filter((block): block is { type: "tool_use"; id: string; name: string; input?: Record<string, unknown> } => block.type === "tool_use")
-        .map((block) => ({
-          type: "tool_call",
-          id: block.id,
-          name: block.name,
-          args: block.input ?? {},
-        }));
+      const content: AssistantContentBlock[] = [];
+      for (const block of payload.content ?? []) {
+        if (block.type === "thinking") {
+          appendAssistantContentBlock(content, {
+            type: "thinking",
+            thinking: block.thinking ?? "",
+            ...(block.signature !== undefined ? { signature: block.signature } : {}),
+          });
+        } else if (block.type === "redacted_thinking") {
+          appendAssistantContentBlock(content, { type: "thinking", thinking: "", redacted: block.data ?? "" });
+        } else if (block.type === "text") {
+          appendAssistantContentBlock(content, { type: "text", text: block.text ?? "" });
+        } else if (block.type === "tool_use") {
+          content.push({ type: "tool_call", id: block.id, name: block.name, args: block.input ?? {} });
+        }
+      }
       const usage = usageFromValue(payload.usage, options);
-      const finishReason = mapFinishReason(payload.stop_reason, toolCalls.length > 0);
+      const finishReason = mapFinishReason(payload.stop_reason, content.some((block) => block.type === "tool_call"));
 
       return {
-        message: buildAssistantMessage(model, text, "", toolCalls, usage, finishReason),
+        message: buildAssistantMessageFromContent(model, content, usage, finishReason, "anthropic"),
         usage,
         finishReason,
         providerMeta: { model, requestId: payload.id },
@@ -269,6 +313,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       };
       if (request.tools?.length) body.tools = toAnthropicTools(request.tools);
       applyResponseFormat(body, request);
+      applyReasoning(body, request, options);
       const temperature = resolveTemperature(request, options);
       if (temperature !== undefined) body.temperature = temperature;
 
@@ -318,6 +363,10 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           latestUsage = mergeUsage(latestUsage, payload.message.usage, options);
         }
 
+        if (event.event === "content_block_start" && payload.content_block?.type === "redacted_thinking") {
+          yield { type: "thinking", delta: "", redacted: payload.content_block.data ?? "" };
+        }
+
         if (event.event === "content_block_start" && payload.content_block?.type === "tool_use") {
           const index = typeof payload.index === "number" ? payload.index : syntheticIndex++;
           const startInput = payload.content_block.input;
@@ -345,6 +394,10 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "content_block_delta") {
           if (payload.delta?.type === "text_delta" && payload.delta.text) {
             yield { type: "text", delta: payload.delta.text };
+          } else if (payload.delta?.type === "thinking_delta" && payload.delta.thinking) {
+            yield { type: "thinking", delta: payload.delta.thinking };
+          } else if (payload.delta?.type === "signature_delta" && payload.delta.signature) {
+            yield { type: "thinking", delta: "", signature: payload.delta.signature };
           } else if (payload.delta?.type === "input_json_delta") {
             if (typeof payload.index !== "number") continue;
             const index = payload.index;

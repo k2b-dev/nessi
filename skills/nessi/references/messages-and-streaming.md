@@ -31,11 +31,16 @@ const assistantMessage = {
   role: "assistant" as const,
   content: [
     { type: "text" as const, text: "I can help with that." },
-    { type: "thinking" as const, thinking: "Reasoning if the provider exposes it." },
+    { type: "thinking" as const, thinking: "Reasoning if the provider exposes it.", signature: "opaque" },
     { type: "tool_call" as const, id: "call-1", name: "search", args: { q: "@k2b/nessi/ai" } },
   ],
 };
 ```
+
+`signature` and `redacted` (on thinking blocks; `signature` also on text and
+tool calls) are opaque provider data, and `message.provider` names the provider
+that produced the message. Keep them when storing history: providers need them
+back unchanged, and each provider only sends its own data back.
 
 Tool result messages return application-computed tool outputs to the next provider call:
 

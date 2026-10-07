@@ -246,7 +246,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const { text, thinking } = splitContent(choice?.message?.content);
 
       return {
-        message: buildAssistantMessage(model, text, thinking, toolCalls, usage, finishReason),
+        message: buildAssistantMessage(model, text, thinking, toolCalls, usage, finishReason, "mistral"),
         usage,
         finishReason,
         providerMeta: { model },

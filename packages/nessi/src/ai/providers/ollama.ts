@@ -192,6 +192,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           toolCalls,
           usage,
           finishReason,
+          "ollama",
         ),
         usage,
         finishReason,

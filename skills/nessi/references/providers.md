@@ -153,7 +153,13 @@ Provider mappings:
   Do not add model lists: unsupported levels come back as provider errors.
 - Wire mapping: OpenAI, vLLM and `openAICompatible()` send `reasoning_effort`;
   OpenRouter sends `reasoning: { effort }`; Ollama sends `think` (`"none"` sends
-  `false`; boolean-only models need `extraBody: { think: true }`).
+  `false`; boolean-only models need `extraBody: { think: true }`); Anthropic
+  sends adaptive thinking plus `output_config.effort` (`"none"` sends
+  `thinking: { type: "disabled" }`; pre-4.6 models need the budget mode via
+  `extraBody`).
+- Signed or encrypted reasoning stays on `thinking` blocks (`signature`,
+  `redacted`) and `message.provider` records the producer. Persist assistant
+  messages unchanged and append-only so the provider gets them back intact.
 - `extraBody` (provider and call) merges extra fields into the request body;
   plain objects merge deeply. Use it for parameters Nessi does not model, e.g.
   vLLM `chat_template_kwargs: { enable_thinking: false }`.
@@ -262,11 +268,14 @@ import { anthropic } from "@k2b/nessi/ai";
 
 const provider = anthropic("claude-sonnet", {
   apiKey: process.env.ANTHROPIC_API_KEY,
-  maxOutputTokens: 1024,
+  maxOutputTokens: 8192,
+  reasoningEffort: "medium",
 });
 ```
 
-Anthropic uses native content blocks for tool use. Consumers still receive normalized assistant content and `block_end` events for final `tool_call` blocks.
+`maxOutputTokens` defaults to 8192 because thinking counts against it.
+Anthropic uses native content blocks for tool use and thinking; signed and
+redacted thinking is sent back automatically. Consumers still receive normalized assistant content and `block_end` events for final `tool_call` blocks.
 
 ## Mistral
 

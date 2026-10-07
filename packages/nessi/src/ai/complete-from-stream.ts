@@ -9,7 +9,7 @@ import type {
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./shared/messages.js";
 
 export const completeFromStream = async (
-  provider: Pick<Provider, "model" | "stream">,
+  provider: Pick<Provider, "name" | "model" | "stream">,
   request: GenerateRequest,
 ): Promise<GenerateResult> => {
   let usage: Usage | undefined;
@@ -39,7 +39,7 @@ export const completeFromStream = async (
 
   finishReason ??= toolCalls.length > 0 ? "tool_use" : "stop";
   return {
-    message: buildAssistantMessageFromContent(provider.model, content, usage, finishReason),
+    message: buildAssistantMessageFromContent(provider.model, content, usage, finishReason, provider.name),
     usage,
     finishReason,
     providerMeta: { model: provider.model },

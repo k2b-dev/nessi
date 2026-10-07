@@ -205,7 +205,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const finishReason = mapFinishReason(candidate?.finishReason, toolCalls.length > 0);
 
       return {
-        message: buildAssistantMessage(model, text, "", toolCalls, usage, finishReason),
+        message: buildAssistantMessage(model, text, "", toolCalls, usage, finishReason, "gemini"),
         usage,
         finishReason,
         providerMeta: { model },

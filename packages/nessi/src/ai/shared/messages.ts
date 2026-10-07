@@ -18,19 +18,23 @@ export const thinkingBlock = (thinking: string): ThinkingBlock => ({ type: "thin
 export const toolCallBlock = (id: string, name: string, args: Record<string, unknown>): ToolCallBlock =>
   ({ type: "tool_call", id, name, args });
 
+const hasThinkingData = (block: ThinkingBlock) => block.signature !== undefined || block.redacted !== undefined;
+
 export const appendAssistantContentBlock = (
   content: AssistantContentBlock[],
   block: AssistantContentBlock,
 ) => {
-  if (block.type === "text" && block.text.length === 0) return;
-  if (block.type === "thinking" && block.thinking.length === 0) return;
+  if (block.type === "text" && block.text.length === 0 && block.signature === undefined) return;
+  if (block.type === "thinking" && block.thinking.length === 0 && !hasThinkingData(block)) return;
 
   const last = content.at(-1);
   if (block.type === "text" && last?.type === "text") {
     last.text += block.text;
+    if (block.signature !== undefined) last.signature = block.signature;
     return;
   }
-  if (block.type === "thinking" && last?.type === "thinking") {
+  // Signed or encrypted reasoning must go back to the provider exactly as received.
+  if (block.type === "thinking" && last?.type === "thinking" && !hasThinkingData(block) && !hasThinkingData(last)) {
     last.thinking += block.thinking;
     return;
   }
@@ -67,13 +71,14 @@ export const buildAssistantMessage = (
   toolCalls: ToolCallBlock[],
   usage?: AssistantMessage["usage"],
   stopReason?: AssistantMessage["stopReason"],
+  provider?: string,
 ): AssistantMessage => {
   const content = [
-    ...(text ? [textBlock(text)] : []),
     ...(thinking ? [thinkingBlock(thinking)] : []),
+    ...(text ? [textBlock(text)] : []),
     ...toolCalls,
   ];
-  return buildAssistantMessageFromContent(model, content, usage, stopReason);
+  return buildAssistantMessageFromContent(model, content, usage, stopReason, provider);
 };
 
 export const buildAssistantMessageFromContent = (
@@ -81,9 +86,10 @@ export const buildAssistantMessageFromContent = (
   content: AssistantContentBlock[],
   usage?: AssistantMessage["usage"],
   stopReason?: AssistantMessage["stopReason"],
+  provider?: string,
 ): AssistantMessage => {
   const clonedContent = content.map(cloneAssistantContentBlock);
-  return { role: "assistant", content: clonedContent, model, usage, stopReason };
+  return { role: "assistant", content: clonedContent, model, ...(provider ? { provider } : {}), usage, stopReason };
 };
 
 export const extractAssistantText = (message: Message) => {

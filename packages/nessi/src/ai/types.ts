@@ -1,14 +1,24 @@
 export type InputFilePart = { type: "file"; data: string; mediaType: string };
 export type ContentPart = string | { type: "text"; text: string } | InputFilePart;
 
+// `signature` and `redacted` are opaque provider data. The provider that produced a block
+// (see `AssistantMessage.provider`) needs them back unchanged in later requests.
+
 export type TextBlock = {
   type: "text";
   text: string;
+  /** Opaque provider signature for this text (Gemini). */
+  signature?: string;
 };
 
 export type ThinkingBlock = {
   type: "thinking";
+  /** Readable reasoning; empty when the provider only returns a signature or encrypted data. */
   thinking: string;
+  /** Opaque signature that verifies this reasoning (Anthropic, Gemini, Mistral). */
+  signature?: string;
+  /** Encrypted reasoning without readable text (Anthropic `redacted_thinking`). */
+  redacted?: string;
 };
 
 export type ToolCallBlock = {
@@ -16,6 +26,8 @@ export type ToolCallBlock = {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  /** Opaque provider signature for this call (Gemini). */
+  signature?: string;
 };
 
 export type AssistantContentBlock = TextBlock | ThinkingBlock | ToolCallBlock;
@@ -33,6 +45,8 @@ export type AssistantMessage = {
   role: "assistant";
   content: AssistantContentBlock[];
   model?: string;
+  /** Name of the provider that produced the message. Providers only send signatures back to themselves. */
+  provider?: string;
   usage?: Usage;
   stopReason?: AssistantStopReason;
 };
@@ -242,11 +256,16 @@ export type StreamEvent =
   | { type: "usage"; usage: Usage; finishReason?: AssistantStopReason };
 
 export type RawStreamEvent =
-  | { type: "text"; delta: string }
-  | { type: "thinking"; delta: string }
+  /** `signature` attaches to the current text block. */
+  | { type: "text"; delta: string; signature?: string }
+  /**
+   * `signature` or `redacted` complete the current thinking block (or form one when none is open);
+   * the next thinking delta starts a new block.
+   */
+  | { type: "thinking"; delta: string; signature?: string; redacted?: string }
   | { type: "tool_start"; callId: string; name: string }
   | { type: "tool_delta"; callId: string; argsDelta: string }
-  | { type: "tool_call"; callId: string; name: string; args: Record<string, unknown> }
+  | { type: "tool_call"; callId: string; name: string; args: Record<string, unknown>; signature?: string }
   | ({ type: "tool_error" } & Omit<ToolStreamIssue, "kind">)
   | ({ type: "tool_cancel" } & Omit<ToolStreamIssue, "kind">)
   | { type: "usage"; usage: Usage; finishReason?: AssistantStopReason }
