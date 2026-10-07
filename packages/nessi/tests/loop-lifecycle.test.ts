@@ -430,4 +430,74 @@ describe("nessi loop lifecycle", () => {
     const end = events.at(-1) as Extract<OutboundEvent, { type: "loop_end" }>;
     expect(end.aggregate.turns[0]?.issues?.some((issue) => issue.message.includes("ledger offline"))).toBe(true);
   });
+
+  it("still charges credits when storing the answer fails", async () => {
+    const store = memoryStore();
+    let deducted = 0;
+    let appends = 0;
+    await collect(nessi({
+      provider: mockProvider([
+        { type: "text", delta: "Answer" },
+        { type: "usage", usage: { input: 1, output: 1, total: 2, creditsUsed: 3 } },
+      ]),
+      store: {
+        load: () => store.load(),
+        append: async (...args: Parameters<typeof store.append>) => {
+          if (++appends > 1) throw new Error("disk full");
+          await store.append(...args);
+        },
+      },
+      systemPrompt: "sys",
+      input: "go",
+      creditStore: { remaining: async () => 10, deduct: async (credits) => { deducted += credits; } },
+    }));
+
+    expect(deducted).toBe(3);
+  });
+
+  it("does not run calls after Mistral reports finish_reason error", async () => {
+    const { mistral } = await import("../src/ai/index.js");
+    const originalFetch = globalThis.fetch;
+    let executed = 0;
+    const lookup = defineTool({ name: "lookup", description: "Lookup", inputSchema: z.object({}) })
+      .server(async () => { executed++; return "x"; });
+    try {
+      const sse = [
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}',
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}',
+        "data: [DONE]",
+      ].join("\n\n") + "\n\n";
+      stubFetch(async () => textResponse(sse, "text/event-stream"));
+      const events = await collect(nessi({ provider: mistral("m", { apiKey: "k" }), store: memoryStore(), systemPrompt: "sys", input: "go", tools: [lookup] }));
+      expect(events.at(-1)).toMatchObject({ reason: "error" });
+      expect(executed).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps earlier issues of a resumed turn when it is aborted", async () => {
+    const store = memoryStore();
+    await store.append({ role: "user", content: [{ type: "text", text: "go" }] });
+    await store.append({
+      role: "assistant",
+      content: [
+        { type: "tool_call", id: "c1", name: "missing", args: {} },
+        { type: "tool_call", id: "c2", name: "waiting", args: {} },
+      ],
+    });
+    const waiting = defineTool({ name: "waiting", description: "Waits", inputSchema: z.object({}) })
+      .server(() => new Promise(() => {}));
+
+    const loop = nessi({ provider: mockProvider([]), store, systemPrompt: "sys", tools: [waiting] });
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
+      if (event.type === "tool_execution_start" && event.callId === "c2") setTimeout(() => loop.abort(), 5);
+    }
+
+    const end = events.at(-1) as Extract<OutboundEvent, { type: "loop_end" }>;
+    expect(end.reason).toBe("aborted");
+    expect(end.aggregate.turns[0]?.issues?.some((issue) => issue.kind === "tool_execution_error")).toBe(true);
+  });
 });

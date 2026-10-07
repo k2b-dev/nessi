@@ -1177,6 +1177,14 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       : noopAggregateUpdate;
 
     const turnIssues = { issues: [] as LoopIssueAggregate[], toolIssues: [] as LoopToolIssueAggregate[] };
+    const syncResumedIssues = () => {
+      if (!aggregateTurn || turnIssues.issues.length === 0) return;
+      aggregateTurn.issues = [...(aggregateTurn.issues ?? []), ...turnIssues.issues.map((issue) => ({ ...issue }))];
+      aggregateTurn.toolIssues = [
+        ...(aggregateTurn.toolIssues ?? []),
+        ...turnIssues.toolIssues.map((issue) => ({ ...issue })),
+      ];
+    };
     yield { type: "turn_start", agentId, loopId, ...turnCtx, resumed: true };
     try {
       for (const tc of pending) {
@@ -1185,16 +1193,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       }
     } catch (error) {
       // An abort while a resumed call runs still closes the turn.
-      if (signal.aborted) yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+      if (signal.aborted) {
+        syncResumedIssues();
+        yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+      }
       throw error;
     }
-    if (aggregateTurn && turnIssues.issues.length > 0) {
-      aggregateTurn.issues = [...(aggregateTurn.issues ?? []), ...turnIssues.issues.map((issue) => ({ ...issue }))];
-      aggregateTurn.toolIssues = [
-        ...(aggregateTurn.toolIssues ?? []),
-        ...turnIssues.toolIssues.map((issue) => ({ ...issue })),
-      ];
-    }
+    syncResumedIssues();
     yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
   }
 
@@ -1539,11 +1544,23 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           turnIssues.issues,
           turnIssues.toolIssues,
         );
-        await store.append(assistantMessage);
-
-        if (creditStore && turnUsage.creditsUsed && turnUsage.creditsUsed > 0) {
-          await creditStore.deduct(turnUsage.creditsUsed);
+        // Storing and charging are attempted independently; the first failure then ends the loop.
+        let storeFailed = false;
+        let storeError: unknown;
+        try {
+          await store.append(assistantMessage);
+        } catch (error) {
+          storeFailed = true;
+          storeError = error;
         }
+        if (creditStore && turnUsage.creditsUsed && turnUsage.creditsUsed > 0) {
+          try {
+            await creditStore.deduct(turnUsage.creditsUsed);
+          } catch (error) {
+            if (!storeFailed) throw error;
+          }
+        }
+        if (storeFailed) throw storeError;
 
         // The provider stopped the answer itself (content filter, safety, malformed call): its
         // tool calls are not executed and the loop ends with an error.

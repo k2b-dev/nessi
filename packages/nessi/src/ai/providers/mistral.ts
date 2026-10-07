@@ -192,7 +192,9 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
 
 const mapFinishReason = (reason: string | null | undefined, hasTools: boolean) => {
   if (reason === "tool_calls") return "tool_use" as const;
-  if (reason === "length") return "max_tokens" as const;
+  if (reason === "length" || reason === "model_length") return "max_tokens" as const;
+  // Mistral stopped the answer itself; its tool calls must not run.
+  if (reason === "error" || reason === "content_filter") return "error" as const;
   if (hasTools) return "tool_use" as const;
   return "stop" as const;
 };
