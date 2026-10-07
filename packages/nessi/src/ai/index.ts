@@ -63,6 +63,8 @@ export type {
   Provider,
   ProviderCapabilities,
   ProviderFamily,
+  ProviderRequestDefaults,
+  ReasoningEffort,
   ProviderIssue,
   ProviderTimeouts,
   RuntimeIssue,

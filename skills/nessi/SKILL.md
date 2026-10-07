@@ -42,7 +42,7 @@ Read only the references needed for the task:
 - Use environment variables for API keys and avoid hardcoding secrets.
 - Stream by iterating events and switching on `event.type`.
 - For root `nessi()` loops, pass an application-level `loopId` when the app already has a request/response group id; otherwise use the generated `event.loopId` that appears on every outbound event.
-- For root `nessi()` loops, pass `temperature`, `maxOutputTokens`, and `disableReasoning` at the top level when the app has a default generation policy for the whole loop.
+- For root `nessi()` loops, pass `temperature`, `maxOutputTokens`, `reasoningEffort` and `extraBody` at the top level when the app has a default generation policy for the whole loop. `disableReasoning` is deprecated; use `reasoningEffort: "none"`.
 - For root `nessi()` loops, use `event.type === "loop_end"` plus `event.aggregate` for one logical response group, aggregate usage, timing, loop-level stats, assistant turn count, tool calls, tool results, validation/execution errors, and malformed/cancelled tool-stream issues across multi-turn tool loops.
 - Use `loop.steer(message)` when the caller owns the active loop. Use the optional `steering` callback when input arrives through another process or worker; return one message, an ordered array, or `undefined` from application-owned persistence.
 - Treat `steer_applied` as the common confirmation for local and callback-supplied steering. The callback is checked only at safe loop boundaries, including before provider calls and before normal completion; it does not interrupt an in-flight provider request or tool.
@@ -160,7 +160,7 @@ const loop = nessi({
   tools,
   temperature: 0,
   maxOutputTokens: 512,
-  disableReasoning: true,
+  reasoningEffort: "none",
 });
 
 const textBlocks = new Set<string>();

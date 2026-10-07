@@ -68,6 +68,8 @@ describe("nessi.structured", () => {
       tools: [],
       maxOutputTokens: 64,
       temperature: 0,
+      reasoningEffort: "low",
+      extraBody: { top_k: 1 },
     });
 
     expect(result.output).toEqual({ title: "Launch", count: 2 });
@@ -85,6 +87,8 @@ describe("nessi.structured", () => {
     expect((capturedRequest?.responseFormat?.schema as Record<string, unknown> | undefined)?.$schema).toBeUndefined();
     expect(capturedRequest?.maxOutputTokens).toBe(64);
     expect(capturedRequest?.temperature).toBe(0);
+    expect(capturedRequest?.reasoningEffort).toBe("low");
+    expect(capturedRequest?.extraBody).toEqual({ top_k: 1 });
     expect(capturedRequest?.messages[0]?.role).toBe("user");
     expect(capturedRequest?.messages[0]?.role === "user" ? capturedRequest.messages[0].content[1] : undefined)
       .toEqual({ type: "file", mediaType: "image/png", data: "abc123" });

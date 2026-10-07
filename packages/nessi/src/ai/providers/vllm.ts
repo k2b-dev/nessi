@@ -1,7 +1,7 @@
 import { openAICompatible } from "./openai-compatible.js";
-import type { OpenAICompatibleConfig, Provider, ProviderTimeouts } from "../types.js";
+import type { OpenAICompatibleConfig, Provider, ProviderRequestDefaults, ProviderTimeouts } from "../types.js";
 
-export type VLLMOptions = {
+export type VLLMOptions = ProviderRequestDefaults & {
   apiKey?: string;
   baseURL?: string;
   contextWindow?: number;
@@ -22,6 +22,8 @@ export const vllm = (model: string, options?: VLLMOptions): Provider => {
     creditsPerInputToken: options?.creditsPerInputToken,
     creditsPerOutputToken: options?.creditsPerOutputToken,
     timeouts: options?.timeouts,
+    reasoningEffort: options?.reasoningEffort,
+    extraBody: options?.extraBody,
     compat: {
       toolCallIdPolicy: "passthrough",
       supportsUsageInStreaming: true,

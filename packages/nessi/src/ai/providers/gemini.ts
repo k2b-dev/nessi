@@ -1,6 +1,7 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { safeJsonParse } from "../shared/json.js";
+import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toGeminiTools } from "../shared/tools.js";
@@ -10,6 +11,7 @@ import type {
   GenerateResult,
   Message,
   Provider,
+  ProviderRequestDefaults,
   ProviderTimeouts,
   RawStreamEvent,
   StreamEvent,
@@ -42,7 +44,7 @@ type GeminiResponse = {
   };
 };
 
-export type GeminiOptions = {
+export type GeminiOptions = ProviderRequestDefaults & {
   apiKey?: string;
   baseURL?: string;
   contextWindow?: number;
@@ -153,7 +155,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       generationConfig.responseJsonSchema = request.responseFormat.schema;
     }
     if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
-    return body;
+    return withExtraBody(body, request, options);
   };
 
   return {

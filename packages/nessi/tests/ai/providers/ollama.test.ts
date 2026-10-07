@@ -99,4 +99,29 @@ describe("ollama provider", () => {
 
     expect(capturedBody.options).toEqual({ num_predict: 64 });
   });
+
+  it("streams thinking before the answer", async () => {
+    stubFetch(async () => textResponse(await fixtureText("../fixtures/ollama/thinking.ndjson"), "application/x-ndjson"));
+
+    const events = [];
+    for await (const event of ollama("gpt-oss").stream({ messages: [] })) events.push(event);
+    const blocks = events.flatMap((event) => (event.type === "block_end" ? [event.block] : []));
+
+    expect(blocks).toEqual([{ type: "thinking", thinking: "Let me think." }, { type: "text", text: "Answer." }]);
+  });
+
+  it("maps reasoningEffort to think", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    stubFetch(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(await fixtureJson("../fixtures/ollama/complete.json"));
+    });
+
+    await ollama("gpt-oss").complete({ messages: [] });
+    await ollama("gpt-oss", { reasoningEffort: "high" }).complete({ messages: [] });
+    await ollama("gpt-oss", { reasoningEffort: "high" }).complete({ messages: [], reasoningEffort: "none" });
+    await ollama("qwen3").complete({ messages: [], extraBody: { think: true } });
+
+    expect(bodies.map((body) => body.think)).toEqual([undefined, "high", false, true]);
+  });
 });

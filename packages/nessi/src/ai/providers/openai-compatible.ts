@@ -1,6 +1,7 @@
 import { formatConnectionError, isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { createStrictToolCallIdFactory } from "../shared/tool-call-ids.js";
@@ -233,6 +234,21 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   };
 };
 
+/**
+ * Sends the reasoning effort in the configured wire format. The deprecated `disableReasoning`
+ * keeps its original `reasoning_effort: "low"` mapping.
+ */
+const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest, config: OpenAICompatibleConfig) => {
+  const reasoning = resolveReasoning(request, config);
+  if (reasoning.legacyDisable) {
+    body.reasoning_effort = "low";
+    return;
+  }
+  if (reasoning.effort === undefined) return;
+  if (config.compat?.reasoningFormat === "openrouter") body.reasoning = { effort: reasoning.effort };
+  else body.reasoning_effort = reasoning.effort;
+};
+
 export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
   const baseURL = config.baseURL.replace(/\/+$/, "");
   const contextWindow = config.contextWindow ?? 128_000;
@@ -265,7 +281,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       if (request.maxOutputTokens !== undefined) {
         body[config.compat?.maxTokensField ?? "max_completion_tokens"] = request.maxOutputTokens;
       }
-      if (request.disableReasoning) body.reasoning_effort = "low";
+      applyReasoning(body, request, config);
       const temperature = resolveTemperature(request);
       if (temperature !== undefined) body.temperature = temperature;
 
@@ -278,7 +294,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       const response = await fetch(`${baseURL}/chat/completions`, {
         method: "POST",
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify(withExtraBody(body, request, config)),
         signal: request.signal,
       }).catch((error: unknown) => {
         throw new Error(formatConnectionError(config.name, error));
@@ -312,7 +328,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       if (request.maxOutputTokens !== undefined) {
         body[config.compat?.maxTokensField ?? "max_completion_tokens"] = request.maxOutputTokens;
       }
-      if (request.disableReasoning) body.reasoning_effort = "low";
+      applyReasoning(body, request, config);
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -323,7 +339,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       const result = await openSSEStream(
         `${baseURL}/chat/completions`,
         headers,
-        body,
+        withExtraBody(body, request, config),
         config.name,
         request.signal,
         contextWindow,

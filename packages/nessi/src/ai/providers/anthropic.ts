@@ -1,6 +1,7 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toAnthropicTools } from "../shared/tools.js";
@@ -10,6 +11,7 @@ import type {
   GenerateResult,
   Message,
   Provider,
+  ProviderRequestDefaults,
   ProviderTimeouts,
   RawStreamEvent,
   StreamEvent,
@@ -67,7 +69,7 @@ type AnthropicStreamEvent = {
 // Mid-stream error types worth retrying; see https://docs.anthropic.com/en/api/errors
 const RETRYABLE_STREAM_ERRORS = new Set(["overloaded_error", "rate_limit_error", "api_error", "timeout_error"]);
 
-export type AnthropicOptions = {
+export type AnthropicOptions = ProviderRequestDefaults & {
   apiKey?: string;
   baseURL?: string;
   apiVersion?: string;
@@ -220,7 +222,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           "x-api-key": options?.apiKey ?? globalThis.process?.env?.ANTHROPIC_API_KEY ?? "",
           "anthropic-version": apiVersion,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(withExtraBody(body, request, options)),
         signal: request.signal,
       }).catch((error: unknown) => {
         throw new Error(formatConnectionError("anthropic", error));
@@ -277,7 +279,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           "x-api-key": options?.apiKey ?? globalThis.process?.env?.ANTHROPIC_API_KEY ?? "",
           "anthropic-version": apiVersion,
         },
-        body,
+        withExtraBody(body, request, options),
         "anthropic",
         request.signal,
         undefined,

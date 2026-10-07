@@ -165,6 +165,23 @@ export type ProviderCapabilities = {
   structuredOutput?: boolean;
 };
 
+/**
+ * How much the model should reason. Passed to the provider unchanged, so new levels
+ * work without a Nessi update; "none" turns reasoning off. Support depends on the model.
+ */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | (string & {});
+
+/** Per-provider defaults that a request can override. */
+export type ProviderRequestDefaults = {
+  /** Default reasoning effort; `GenerateRequest.reasoningEffort` wins. Unset leaves the model default. */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * Extra fields for the provider's request body, merged over what Nessi sends. Plain objects
+   * merge deeply, everything else replaces. Use it for parameters Nessi does not model.
+   */
+  extraBody?: Record<string, unknown>;
+};
+
 export type GenerateRequest = {
   systemPrompt?: string;
   messages: Message[];
@@ -173,13 +190,14 @@ export type GenerateRequest = {
   signal?: AbortSignal;
   temperature?: number;
   maxOutputTokens?: number;
+  /** Reasoning effort for this call; overrides the provider's `reasoningEffort`. */
+  reasoningEffort?: ReasoningEffort;
+  /** Extra request body fields for this call, merged over the provider's `extraBody`. */
+  extraBody?: Record<string, unknown>;
   /**
-   * Ask the provider to skip (or minimize) internal reasoning for this call.
-   * Useful for simple generative tasks where reasoning tokens would otherwise
-   * consume the entire output budget. Provider-specific mapping:
-   * - openai-compatible (including openai, openrouter, vllm): sets `reasoning_effort: "low"`
-   * - gemini: sets `thinkingConfig.thinkingBudget: 0`
-   * - anthropic/mistral/ollama: no-op (reasoning is opt-in or absent)
+   * @deprecated Use `reasoningEffort: "none"` (or a low level) instead. Kept with its original
+   * mapping: openai-compatible sends `reasoning_effort: "low"`, Gemini sets `thinkingBudget: 0`,
+   * other providers ignore it. Ignored when `reasoningEffort` is set on the request.
    */
   disableReasoning?: boolean;
 };
@@ -258,10 +276,12 @@ export type OpenAICompat = {
   /** Defaults to details, then reasoning/reasoning_content. "text" prefers the text fields; "none" disables thinking. */
   thinkingFormat?: "none" | "reasoning_details" | "text";
   maxTokensField?: "max_tokens" | "max_completion_tokens";
+  /** How `reasoningEffort` is sent: OpenAI's `reasoning_effort` (default) or OpenRouter's `reasoning: { effort }`. */
+  reasoningFormat?: "reasoning_effort" | "openrouter";
   structuredOutput?: "response_format" | "vllm_structured_outputs" | false;
 };
 
-export type OpenAICompatibleConfig = {
+export type OpenAICompatibleConfig = ProviderRequestDefaults & {
   name: string;
   model: string;
   baseURL: string;

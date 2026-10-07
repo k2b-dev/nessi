@@ -375,6 +375,29 @@ describe("nessi core loop", () => {
     expect(capturedRequest.disableReasoning).toBe(true);
   });
 
+  it("passes reasoningEffort and extraBody to the provider", async () => {
+    let capturedRequest: any;
+    await collectEvents(
+      nessi({
+        provider: mockProvider(
+          [
+            { type: "text", delta: "ok" },
+            { type: "usage", usage: { input: 1, output: 1, total: 2 } },
+          ],
+          { onRequest: (request) => { capturedRequest = request; } },
+        ),
+        systemPrompt: "test",
+        store: memoryStore(),
+        input: "Hi",
+        reasoningEffort: "high",
+        extraBody: { top_k: 20 },
+      }),
+    );
+
+    expect(capturedRequest.reasoningEffort).toBe("high");
+    expect(capturedRequest.extraBody).toEqual({ top_k: 20 });
+  });
+
   it("coalesces adjacent block deltas when requested", async () => {
     const events = await collectEvents(
       nessi({

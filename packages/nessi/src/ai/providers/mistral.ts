@@ -1,6 +1,7 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { createStrictToolCallIdFactory } from "../shared/tool-call-ids.js";
@@ -11,6 +12,7 @@ import type {
   GenerateResult,
   Message,
   Provider,
+  ProviderRequestDefaults,
   ProviderTimeouts,
   RawStreamEvent,
   StreamEvent,
@@ -169,7 +171,7 @@ const applyResponseFormat = (body: Record<string, unknown>, request: GenerateReq
   };
 };
 
-export type MistralOptions = {
+export type MistralOptions = ProviderRequestDefaults & {
   apiKey?: string;
   baseURL?: string;
   contextWindow?: number;
@@ -219,7 +221,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${options?.apiKey ?? globalThis.process?.env?.MISTRAL_API_KEY ?? ""}`,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(withExtraBody(body, request, options)),
         signal: request.signal,
       }).catch((error: unknown) => {
         throw new Error(formatConnectionError("mistral", error));
@@ -273,7 +275,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${options?.apiKey ?? globalThis.process?.env?.MISTRAL_API_KEY ?? ""}`,
         },
-        body,
+        withExtraBody(body, request, options),
         "mistral",
         request.signal,
         undefined,

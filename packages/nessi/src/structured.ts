@@ -324,6 +324,8 @@ const directStructured = async <TOutput extends z.ZodType>(
     temperature: options.temperature,
     maxOutputTokens: options.maxOutputTokens,
     disableReasoning: options.disableReasoning,
+    reasoningEffort: options.reasoningEffort,
+    extraBody: options.extraBody,
     signal: options.signal,
   });
   attempts.push(first);
@@ -344,6 +346,8 @@ const directStructured = async <TOutput extends z.ZodType>(
       temperature: options.temperature,
       maxOutputTokens: options.maxOutputTokens,
       disableReasoning: options.disableReasoning,
+      reasoningEffort: options.reasoningEffort,
+      extraBody: options.extraBody,
       signal: options.signal,
     });
     attempts.push(repair);
@@ -449,6 +453,8 @@ const toolLoopStructured = async <TOutput extends z.ZodType>(
     temperature: options.temperature,
     maxOutputTokens: options.maxOutputTokens,
     disableReasoning: options.disableReasoning,
+    reasoningEffort: options.reasoningEffort,
+    extraBody: options.extraBody,
     signal: options.signal,
   });
 

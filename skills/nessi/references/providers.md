@@ -145,6 +145,21 @@ Provider mappings:
 - Mistral: `response_format.json_schema`
 - Gemini: `generationConfig.responseMimeType` plus `responseJsonSchema`
 
+## Reasoning effort and extra request fields
+
+- `reasoningEffort` works on every provider option object and per call
+  (`complete`, `stream`, `nessi()`, `nessi.structured()`); the call wins, and
+  nothing is sent when unset. Values pass through unchanged; `"none"` is off.
+  Do not add model lists: unsupported levels come back as provider errors.
+- Wire mapping: OpenAI, vLLM and `openAICompatible()` send `reasoning_effort`;
+  OpenRouter sends `reasoning: { effort }`; Ollama sends `think` (`"none"` sends
+  `false`; boolean-only models need `extraBody: { think: true }`).
+- `extraBody` (provider and call) merges extra fields into the request body;
+  plain objects merge deeply. Use it for parameters Nessi does not model, e.g.
+  vLLM `chat_template_kwargs: { enable_thinking: false }`.
+- `disableReasoning` is deprecated and keeps its old mapping; prefer
+  `reasoningEffort: "none"`.
+
 ## Hosted OpenAI
 
 ```ts

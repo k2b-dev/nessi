@@ -1,6 +1,7 @@
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
+import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toOllamaTools } from "../shared/tools.js";
@@ -10,6 +11,7 @@ import type {
   GenerateResult,
   Message,
   Provider,
+  ProviderRequestDefaults,
   ProviderTimeouts,
   RawStreamEvent,
   StreamEvent,
@@ -30,6 +32,7 @@ type OllamaResponse = {
   message?: {
     role?: string;
     content?: string;
+    thinking?: string;
     tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
   };
   done: boolean;
@@ -39,7 +42,7 @@ type OllamaResponse = {
   eval_count?: number;
 };
 
-export type OllamaOptions = {
+export type OllamaOptions = ProviderRequestDefaults & {
   baseURL?: string;
   contextWindow?: number;
   temperature?: number;
@@ -117,6 +120,15 @@ const generationOptions = (request: GenerateRequest, options?: OllamaOptions) =>
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
+/**
+ * Ollama's `think` takes `false` or a model-defined level such as "high". "none" turns it off;
+ * other levels pass through. Boolean-only models need `extraBody: { think: true }`.
+ */
+const applyThink = (body: Record<string, unknown>, request: GenerateRequest, options?: OllamaOptions) => {
+  const { effort } = resolveReasoning(request, options);
+  if (effort !== undefined) body.think = effort === "none" ? false : effort;
+};
+
 const finishReasonFrom = (response: OllamaResponse, hasTools: boolean) => {
   if (response.done_reason === "length") return "max_tokens" as const;
   return hasTools ? "tool_use" as const : "stop" as const;
@@ -135,7 +147,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       streaming: true,
       tools: true,
       images: true,
-      thinking: false,
+      thinking: true,
       usage: true,
       structuredOutput: true,
     },
@@ -150,11 +162,12 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       if (request.responseFormat) body.format = request.responseFormat.schema;
       const generation = generationOptions(request, options);
       if (generation) body.options = generation;
+      applyThink(body, request, options);
 
       const response = await fetch(`${baseURL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(withExtraBody(body, request, options)),
         signal: request.signal,
       }).catch((error: unknown) => {
         throw new Error(formatConnectionError("ollama", error));
@@ -172,7 +185,14 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const finishReason = finishReasonFrom(payload, toolCalls.length > 0);
 
       return {
-        message: buildAssistantMessage(model, payload.message?.content ?? "", "", toolCalls, usage, finishReason),
+        message: buildAssistantMessage(
+          model,
+          payload.message?.content ?? "",
+          payload.message?.thinking ?? "",
+          toolCalls,
+          usage,
+          finishReason,
+        ),
         usage,
         finishReason,
         providerMeta: { model },
@@ -190,6 +210,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       if (request.responseFormat) body.format = request.responseFormat.schema;
       const generation = generationOptions(request, options);
       if (generation) body.options = generation;
+      applyThink(body, request, options);
 
       let response: Response;
       const controller = new AbortController();
@@ -210,7 +231,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           fetch(`${baseURL}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(withExtraBody(body, request, options)),
             signal: controller.signal,
           }),
           new Promise<never>((_, reject) => {
@@ -272,6 +293,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
             yield { type: "error", error: `ollama stream error: ${chunk.error}`, retryable: true };
             return;
           }
+          if (chunk.message?.thinking) yield { type: "thinking", delta: chunk.message.thinking };
           if (chunk.message?.content) yield { type: "text", delta: chunk.message.content };
           for (const toolCall of chunk.message?.tool_calls ?? []) {
             const callId = `ollama-${toolCounter++}`;

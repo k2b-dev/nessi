@@ -265,6 +265,52 @@ for await (const event of provider.stream({ messages })) {
 }
 ```
 
+## Reasoning effort
+
+Set `reasoningEffort` to control how much a reasoning model thinks. Set it on
+the provider as a default, or per call on `complete()`, `stream()`, `nessi()` or
+`nessi.structured()`. A call value wins over the provider default, and nothing
+is sent when neither is set, so the model keeps its own default.
+
+```ts
+const provider = openai("gpt-6.1-sol", { reasoningEffort: "medium" });
+
+const loop = nessi({ provider, systemPrompt, input, store, reasoningEffort: "high" });
+const quick = await provider.complete({ messages, reasoningEffort: "none" });
+```
+
+The value is passed through unchanged, so new levels work without a Nessi
+update. `"none"` turns reasoning off. Common levels are `"none"`, `"minimal"`,
+`"low"`, `"medium"`, `"high"`, `"xhigh"` and `"max"`. Which levels a model
+accepts is up to the model; unsupported values come back as provider errors.
+
+| Provider | Sent as |
+|---|---|
+| `openai`, `vllm`, `openAICompatible()` | `reasoning_effort` |
+| `openrouter` | `reasoning: { effort }` |
+| `ollama` | `think`; `"none"` sends `false` |
+
+On vLLM, `"none"` also turns off thinking for templates such as Qwen's. Ollama
+models that only accept `think: true` or `false` need `extraBody: { think: true }`
+to turn thinking on.
+
+`disableReasoning` is deprecated. It keeps its original behavior: OpenAI-compatible
+providers send `reasoning_effort: "low"`, Gemini sets a zero thinking budget and
+other providers ignore it. It is ignored when the call sets `reasoningEffort`.
+
+### Extra request fields
+
+`extraBody` adds fields to the provider's request body for parameters Nessi does
+not model. Set it on the provider or per call; call values win. Plain objects
+merge deeply into what Nessi sends, other values replace it:
+
+```ts
+const provider = vllm("Qwen/Qwen3-32B", {
+  baseURL: "http://localhost:8000/v1",
+  extraBody: { chat_template_kwargs: { enable_thinking: false } },
+});
+```
+
 ## Audio transcription
 
 Use `openAICompatibleTranscription()` to upload an audio file to a service that

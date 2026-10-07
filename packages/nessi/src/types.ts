@@ -16,6 +16,7 @@ import type {
   Message,
   NessiIssue,
   Provider,
+  ReasoningEffort,
   StreamEvent,
   ToolExecutionIssue,
   ToolHistoricalResultIssue,
@@ -39,6 +40,7 @@ export type {
   NessiIssue,
   Provider,
   ProviderIssue,
+  ReasoningEffort,
   ResponseFormat,
   RuntimeIssue,
   TextBlock,
@@ -239,6 +241,11 @@ export type NessiOptions = {
   maxTurns?: number;
   temperature?: number;
   maxOutputTokens?: number;
+  /** Reasoning effort passed to the provider unchanged; "none" turns reasoning off. Overrides the provider default. */
+  reasoningEffort?: ReasoningEffort;
+  /** Extra request body fields for every provider call, merged over the provider's `extraBody`. */
+  extraBody?: Record<string, unknown>;
+  /** @deprecated Use `reasoningEffort` instead. Ignored when `reasoningEffort` is set. */
   disableReasoning?: boolean;
   coalesce?: CoalesceOptions;
   /** Max chars for tool results in the context sent to the provider. Longer results are truncated. */
@@ -296,6 +303,11 @@ export type StructuredOptions<TOutput extends z.ZodType = z.ZodType> = {
   maxTurns?: number;
   temperature?: number;
   maxOutputTokens?: number;
+  /** Reasoning effort passed to the provider unchanged; "none" turns reasoning off. Overrides the provider default. */
+  reasoningEffort?: ReasoningEffort;
+  /** Extra request body fields for every provider call, merged over the provider's `extraBody`. */
+  extraBody?: Record<string, unknown>;
+  /** @deprecated Use `reasoningEffort` instead. Ignored when `reasoningEffort` is set. */
   disableReasoning?: boolean;
   signal?: AbortSignal;
   onEvent?: (event: OutboundEvent) => void;

@@ -1,7 +1,7 @@
 import { openAICompatible } from "./openai-compatible.js";
-import type { OpenAICompatibleConfig, Provider, ProviderTimeouts } from "../types.js";
+import type { OpenAICompatibleConfig, Provider, ProviderRequestDefaults, ProviderTimeouts } from "../types.js";
 
-export type OpenRouterOptions = {
+export type OpenRouterOptions = ProviderRequestDefaults & {
   apiKey?: string;
   baseURL?: string;
   contextWindow?: number;
@@ -28,11 +28,14 @@ export const openrouter = (model: string, options?: OpenRouterOptions): Provider
     creditsPerInputToken: options?.creditsPerInputToken,
     creditsPerOutputToken: options?.creditsPerOutputToken,
     timeouts: options?.timeouts,
+    reasoningEffort: options?.reasoningEffort,
+    extraBody: options?.extraBody,
     headers,
     compat: {
       toolCallIdPolicy: "passthrough",
       supportsUsageInStreaming: true,
       thinkingFormat: "reasoning_details",
+      reasoningFormat: "openrouter",
       maxTokensField: "max_tokens",
       structuredOutput: "response_format",
     },

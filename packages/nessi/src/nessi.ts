@@ -487,6 +487,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     temperature,
     maxOutputTokens,
     disableReasoning,
+    reasoningEffort,
+    extraBody,
     coalesce,
     maxToolResultChars,
     signal: externalSignal,
@@ -1331,6 +1333,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             temperature,
             maxOutputTokens,
             disableReasoning,
+            reasoningEffort,
+            extraBody,
             signal,
           })[Symbol.asyncIterator]();
           try {

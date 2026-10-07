@@ -271,7 +271,7 @@ tool calls stay unanswered in the store, so a later loop without `input` resumes
 them. A later loop with new `input` sends them to the provider as error results
 instead. A `compact` function receives the loop signal as `ctx.signal`.
 
-Use `disableReasoning: true` for simple calls where reasoning-capable models would otherwise spend too much output budget. Root `nessi()` accepts the same generation controls:
+Use `reasoningEffort` to control reasoning: `"none"` for simple calls where reasoning would spend the output budget, or a level such as `"low"` or `"high"`. The value passes through unchanged and works on provider defaults, single calls and root loops; a call value wins. `extraBody` adds request fields Nessi does not model. `disableReasoning` is deprecated. Root `nessi()` accepts the same generation controls:
 
 ```ts
 const loop = nessi({
@@ -281,6 +281,6 @@ const loop = nessi({
   store,
   temperature: 0,
   maxOutputTokens: 512,
-  disableReasoning: true,
+  reasoningEffort: "none",
 });
 ```
