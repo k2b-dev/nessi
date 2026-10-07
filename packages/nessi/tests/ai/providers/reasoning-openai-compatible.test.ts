@@ -135,6 +135,35 @@ describe("OpenRouter reasoning_details round-trip", () => {
     expect(details).toEqual([{ type: "reasoning.text", text: "Plan.", signature: "late-sig", index: 0, format: "f1" }]);
   });
 
+  it("holds reasoning text back while a tool call is still streaming", async () => {
+    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { fixtureText } = await import("../helpers/fixtures.js");
+    stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-interleaved.sse"), "text/event-stream"));
+
+    const { message } = await completeFromStream(openrouter("anthropic/claude", { apiKey: "k" }), { messages: [] });
+
+    expect(message.content).toEqual([
+      { type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } },
+      {
+        type: "thinking",
+        thinking: "Also check Bonn.",
+        details: [{ type: "reasoning.text", text: "Also check Bonn.", index: 0, format: "f1" }],
+      },
+    ]);
+  });
+
+  it("joins a signature that arrives after the answer started with its reasoning item", async () => {
+    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { fixtureText } = await import("../helpers/fixtures.js");
+    stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-signature-after-answer.sse"), "text/event-stream"));
+
+    const { message } = await completeFromStream(openrouter("anthropic/claude", { apiKey: "k" }), { messages: [] });
+    const details = message.content.flatMap((block) => (block.type === "thinking" ? block.details ?? [] : []));
+
+    expect(details).toEqual([{ type: "reasoning.text", text: "Greet.", signature: "sig", index: 0, format: "f1" }]);
+    expect(message.content.filter((block) => block.type === "text")).toEqual([{ type: "text", text: "Hello" }]);
+  });
+
   it("does not send reasoning items to another provider", async () => {
     const bodies = await sentBodies(openai("gpt-x", { apiKey: "k" }), {
       messages: [

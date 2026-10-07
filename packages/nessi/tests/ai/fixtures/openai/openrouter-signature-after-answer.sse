@@ -1,0 +1,8 @@
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Greet.","index":0,"format":"f1"}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"","signature":"sig","index":0}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+

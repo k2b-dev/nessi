@@ -382,8 +382,8 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       let latestUsage: Usage | undefined;
       let latestFinishReason: AssistantStopReason | undefined;
       let sawDone = false;
-      // Reasoning items arrive in pieces keyed by `index`; they are completed and attached to a
-      // thinking block once the answer starts, or at the end after any tool calls.
+      // Reasoning items arrive in pieces keyed by `index`, sometimes with the signature after the
+      // answer started; they are completed over the whole stream and attached once at the end.
       const reasoningItems = new Map<number, ReasoningDetail>();
       const collectReasoningDetail = (detail: ReasoningDetail, position: number) => {
         const index = typeof detail.index === "number" ? detail.index : position;
@@ -400,6 +400,13 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
             current[key] = value;
           }
         }
+      };
+      let deferredThinking = "";
+      const flushDeferredThinking = function* (): Generator<RawStreamEvent> {
+        if (!deferredThinking) return;
+        const delta = deferredThinking;
+        deferredThinking = "";
+        yield { type: "thinking", delta };
       };
       const flushReasoningDetails = function* (): Generator<RawStreamEvent> {
         if (reasoningItems.size === 0) return;
@@ -456,13 +463,12 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         const delta = choice.delta;
 
         const thinking = thinkingFromDelta(delta, config);
-        if (thinking) yield { type: "thinking", delta: thinking };
+        // Reasoning that arrives while a tool call is still streaming waits until the call is complete.
+        if (thinking && pendingToolCalls.length > 0) deferredThinking += thinking;
+        else if (thinking) yield { type: "thinking", delta: thinking };
         if (config.compat?.thinkingFormat !== "none" && config.compat?.thinkingFormat !== "text") {
           (delta.reasoning_details ?? []).forEach(collectReasoningDetail);
         }
-        // Attach finished reasoning when the answer starts; while tool calls are open, wait for
-        // the end so no thinking event interrupts them.
-        if (delta.content && pendingToolCalls.length === 0) yield* flushReasoningDetails();
         if (delta.content) yield { type: "text", delta: delta.content };
 
         if (delta.tool_calls) {
@@ -498,6 +504,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
 
         if (choice.finish_reason === "tool_calls") {
           yield* flushToolCalls();
+          yield* flushDeferredThinking();
         }
         if (choice.finish_reason) latestFinishReason = mapFinishReason(choice.finish_reason, false);
         if (usage) {
@@ -514,6 +521,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       if (pendingToolCalls.length > 0) {
         latestFinishReason = "tool_use";
         yield* flushToolCalls();
+        yield* flushDeferredThinking();
       }
       yield* flushReasoningDetails();
 

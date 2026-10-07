@@ -61,9 +61,14 @@ describe("openAICompatible provider", () => {
       const textIndex = testCase.expected ? 1 : 0;
       const toolIndex = textIndex + 1;
 
-      // Reasoning item round-trips are covered separately; this compares readable text only.
+      // Reasoning item round-trips are covered separately; this compares readable text only, so the
+      // empty block that carries the items at the end is left out.
+      const carrierIds = new Set(events.flatMap((event) =>
+        event.type === "block_end" && event.block.type === "thinking" && !event.block.thinking && event.block.details
+          ? [event.blockId]
+          : []));
       const withoutDetails = events
-        .filter((event) => event.type !== "usage")
+        .filter((event) => event.type !== "usage" && !("blockId" in event && carrierIds.has(event.blockId)))
         .map((event) => {
           if (event.type !== "block_end" || event.block.type !== "thinking") return event;
           const { details: _details, ...block } = event.block;

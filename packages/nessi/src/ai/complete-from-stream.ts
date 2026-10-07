@@ -9,7 +9,8 @@ import type {
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./shared/messages.js";
 
 export const completeFromStream = async (
-  provider: Pick<Provider, "name" | "model" | "stream">,
+  /** `name`, when given, is recorded as the message's producer. */
+  provider: Pick<Provider, "model" | "stream"> & { name?: string },
   request: GenerateRequest,
 ): Promise<GenerateResult> => {
   let usage: Usage | undefined;
