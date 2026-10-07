@@ -90,15 +90,19 @@ describe("OpenRouter reasoning_details round-trip", () => {
     const { message } = await completeFromStream(provider, { messages: [] });
 
     expect(message.provider).toBe("openrouter");
-    expect(message.content[0]).toEqual({
-      type: "thinking",
-      thinking: "Need weather.",
-      details: [
-        { type: "reasoning.text", text: "Need weather.", signature: "sig-1", index: 0, format: "anthropic-claude-v1" },
-        { type: "reasoning.encrypted", data: "enc-2", index: 1, format: "anthropic-claude-v1" },
-      ],
-    });
-    expect(message.content[1]).toMatchObject({ type: "tool_call", id: "call_1", name: "weather" });
+    // Without answer text, the items attach after the tool call so they cannot interrupt it.
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "Need weather." },
+      { type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } },
+      {
+        type: "thinking",
+        thinking: "",
+        details: [
+          { type: "reasoning.text", text: "Need weather.", signature: "sig-1", index: 0, format: "anthropic-claude-v1" },
+          { type: "reasoning.encrypted", data: "enc-2", index: 1, format: "anthropic-claude-v1" },
+        ],
+      },
+    ]);
 
     await completeFromStream(provider, {
       messages: [
@@ -112,6 +116,23 @@ describe("OpenRouter reasoning_details round-trip", () => {
       { type: "reasoning.text", text: "Need weather.", signature: "sig-1", index: 0, format: "anthropic-claude-v1" },
       { type: "reasoning.encrypted", data: "enc-2", index: 1, format: "anthropic-claude-v1" },
     ]);
+  });
+
+  it("keeps a tool call valid when reasoning metadata arrives after it started", async () => {
+    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { fixtureText } = await import("../helpers/fixtures.js");
+    stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-late-signature.sse"), "text/event-stream"));
+    const events = [];
+    for await (const event of openrouter("anthropic/claude", { apiKey: "k" }).stream({ messages: [] })) events.push(event);
+
+    expect(events.some((event) => event.type === "issue")).toBe(false);
+
+    stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-late-signature.sse"), "text/event-stream"));
+    const { message } = await completeFromStream(openrouter("anthropic/claude", { apiKey: "k" }), { messages: [] });
+    const calls = message.content.filter((block) => block.type === "tool_call");
+    const details = message.content.flatMap((block) => (block.type === "thinking" ? block.details ?? [] : []));
+    expect(calls).toEqual([{ type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } }]);
+    expect(details).toEqual([{ type: "reasoning.text", text: "Plan.", signature: "late-sig", index: 0, format: "f1" }]);
   });
 
   it("does not send reasoning items to another provider", async () => {

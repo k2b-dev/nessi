@@ -29,6 +29,8 @@ type OpenBlock = {
   signature?: string;
   redacted?: string;
   details?: Record<string, unknown>[];
+  /** Whitespace streamed before the block opened; kept only if the block ends up signed. */
+  leading: string;
 };
 
 type BlockData = { signature?: string; redacted?: string; details?: Record<string, unknown>[] };
@@ -83,10 +85,12 @@ function toolIssue(
 
 const blockFromOpen = (block: OpenBlock): AssistantContentBlock => {
   const signature = block.signature !== undefined ? { signature: block.signature } : {};
-  if (block.kind === "text") return { type: "text", text: block.text, ...signature };
+  // Signed content must go back byte for byte, including whitespace that did not open the block.
+  const text = block.signature !== undefined ? block.leading + block.text : block.text;
+  if (block.kind === "text") return { type: "text", text, ...signature };
   return {
     type: "thinking",
-    thinking: block.text,
+    thinking: text,
     ...signature,
     ...(block.redacted !== undefined ? { redacted: block.redacted } : {}),
     ...(block.details !== undefined ? { details: block.details } : {}),
@@ -110,7 +114,7 @@ export async function* normalizeProviderStream(
   let emittedToolCallCount = 0;
   let issueCount = 0;
   let suppressMalformedTextSpan = false;
-  let pendingThinkingWhitespace = "";
+  let pendingWhitespace: { kind: "text" | "thinking"; text: string } | undefined;
 
   const emitIssue = function* (value: NessiIssue): Generator<StreamEvent> {
     issueCount++;
@@ -139,17 +143,17 @@ export async function* normalizeProviderStream(
 
     if (openBlock?.kind !== kind) {
       yield* closeOpenBlock();
-      // Leading whitespace alone does not open a block. Thinking keeps it for the block that
-      // follows, because signed reasoning must be returned byte for byte.
+      // Leading whitespace alone does not open a block. It is remembered for the next block of
+      // the same kind in case that block gets signed; any other content discards it.
       if (!hasData && delta.trim().length === 0) {
-        if (kind === "thinking") pendingThinkingWhitespace += delta;
+        pendingWhitespace = { kind, text: (pendingWhitespace?.kind === kind ? pendingWhitespace.text : "") + delta };
         return;
       }
+      const leading = pendingWhitespace?.kind === kind ? pendingWhitespace.text : "";
+      pendingWhitespace = undefined;
       const index = nextBlockIndex++;
-      openBlock = { blockId: `block-${index}`, index, kind, text: "" };
+      openBlock = { blockId: `block-${index}`, index, kind, text: "", leading };
       yield { type: "block_start", blockId: openBlock.blockId, index, kind };
-      if (kind === "thinking") delta = pendingThinkingWhitespace + delta;
-      pendingThinkingWhitespace = "";
     }
 
     if (delta.length > 0) {
@@ -159,13 +163,13 @@ export async function* normalizeProviderStream(
     if (data.signature !== undefined) openBlock.signature = data.signature;
     if (data.redacted !== undefined) openBlock.redacted = data.redacted;
     if (data.details !== undefined) openBlock.details = data.details;
-    // A signature completes a thinking block; following reasoning belongs to a new one.
-    if (kind === "thinking" && hasData) yield* closeOpenBlock();
+    // A signature completes the block, so the next signed part cannot merge into it.
+    if (hasData) yield* closeOpenBlock();
   };
 
   const emitToolCallBlock = function* (toolCall: ToolCallBlock): Generator<StreamEvent> {
     yield* closeOpenBlock();
-    pendingThinkingWhitespace = "";
+    pendingWhitespace = undefined;
     const index = nextBlockIndex++;
     const blockId = `block-${index}`;
     yield {

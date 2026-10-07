@@ -1,0 +1,10 @@
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Plan.","index":0,"format":"f1"}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"weather","arguments":"{\"city\":"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"","signature":"late-sig","index":0}],"tool_calls":[{"index":0,"function":{"arguments":"\"Ulm\"}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+

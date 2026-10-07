@@ -60,6 +60,35 @@ describe("signed blocks in the stream normalizer", () => {
     ])).toEqual([{ type: "thinking", thinking: "\n Reason", signature: "s" }]);
   });
 
+  it("keeps signed text parts apart and restores their leading whitespace", async () => {
+    expect(await blocksOf([
+      { type: "text", delta: "first", signature: "s1" },
+      { type: "text", delta: "second", signature: "s2" },
+      { type: "text", delta: "\n " },
+      { type: "text", delta: "Answer" },
+      { type: "text", delta: "", signature: "s3" },
+      { type: "text", delta: "tail" },
+    ])).toEqual([
+      { type: "text", text: "first", signature: "s1" },
+      { type: "text", text: "second", signature: "s2" },
+      { type: "text", text: "\n Answer", signature: "s3" },
+      { type: "text", text: "tail" },
+    ]);
+  });
+
+  it("drops remembered whitespace when other content intervenes", async () => {
+    expect(await blocksOf([
+      { type: "thinking", delta: "\n " },
+      { type: "text", delta: " " },
+      { type: "thinking", delta: "R", signature: "s" },
+    ])).toEqual([{ type: "thinking", thinking: "R", signature: "s" }]);
+  });
+
+  it("leaves unsigned blocks without leading whitespace as before", async () => {
+    expect(await blocksOf([{ type: "thinking", delta: "\n" }, { type: "thinking", delta: "Plain" }, { type: "text", delta: " \n" }, { type: "text", delta: "Hi" }]))
+      .toEqual([{ type: "thinking", thinking: "Plain" }, { type: "text", text: "Hi" }]);
+  });
+
   it("does not open a block for whitespace-only text", async () => {
     expect(await blocksOf([{ type: "text", delta: "\n" }, { type: "text", delta: "Hi" }])).toEqual([{ type: "text", text: "Hi" }]);
   });
