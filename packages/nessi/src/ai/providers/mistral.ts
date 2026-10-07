@@ -435,7 +435,8 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       }
 
       if (pendingToolCalls.length > 0) {
-        latestFinishReason = "tool_use";
+        // A provider-side stop (e.g. content filter) stays visible even with pending calls.
+        if (latestFinishReason !== "error") latestFinishReason = "tool_use";
         yield* flush();
       }
 

@@ -70,7 +70,8 @@ message. Usage the provider already reported counts in the aggregate and
 against the credit store. Partial content is stored, except for a context
 overflow, which is retried after compaction or ends the loop. When the provider
 itself stops an answer (`finishReason: "error"`, e.g. a content or safety
-filter), its tool calls are not executed and the loop ends with `"error"`. The final `loop_end` event includes `aggregate`, which groups assistant turns, executable tool calls, tool results, validation/execution errors, malformed or cancelled tool streams, summed usage, and timing for the complete logical loop. `aggregate.timing.totalElapsedMs` is model generation plus active tool execution; approval/client-tool waits are tracked separately as `aggregate.timing.actionWaitMs`. Helper exports such as `mergeUsage()`, `cloneLoopAggregate()`, and `mergeLoopAggregates()` are available from `@k2b/nessi`.
+filter), its tool calls are not executed, not even by a later resume, and the
+loop ends with `"error"`. The final `loop_end` event includes `aggregate`, which groups assistant turns, executable tool calls, tool results, validation/execution errors, malformed or cancelled tool streams, summed usage, and timing for the complete logical loop. `aggregate.timing.totalElapsedMs` is model generation plus active tool execution; approval/client-tool waits are tracked separately as `aggregate.timing.actionWaitMs`. Helper exports such as `mergeUsage()`, `cloneLoopAggregate()`, and `mergeLoopAggregates()` are available from `@k2b/nessi`.
 
 ## Dynamic tools
 

@@ -1151,6 +1151,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     const entry = entries[lastAssistantIdx]!;
     if (entry.kind === "summary") return;
     const assistantMessage = entry.message as AssistantMessage;
+    // Calls from a response the provider stopped itself are never executed.
+    if (assistantMessage.stopReason === "error") return;
     const toolCallBlocks = assistantMessage.content.filter((block): block is ToolCallBlock => block.type === "tool_call");
     if (toolCallBlocks.length === 0) return;
 
@@ -1356,6 +1358,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
               yield* reportFailure("Storing the partial assistant message failed", error);
             }
           }
+          if (creditStore && usage?.creditsUsed && usage.creditsUsed > 0) {
+            try {
+              await creditStore.deduct(usage.creditsUsed);
+            } catch (error) {
+              yield* reportFailure("Deducting credits failed", error);
+            }
+          }
           if (message.content.length > 0 || usage) {
             recordAssistantTurn(
               message,
@@ -1364,13 +1373,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
               turnIssues.issues,
               turnIssues.toolIssues,
             );
-          }
-          if (creditStore && usage?.creditsUsed && usage.creditsUsed > 0) {
-            try {
-              await creditStore.deduct(usage.creditsUsed);
-            } catch (error) {
-              yield* reportFailure("Deducting credits failed", error);
-            }
           }
           yield { type: "turn_end", agentId, loopId, ...turnCtx, message };
         };
@@ -1523,14 +1525,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           stopReason,
           provider.name,
         );
-        await store.append(assistantMessage);
         lastUsage = turnUsage;
-
         const aggregateToolCalls: LoopToolCallAggregate[] = toolCalls.map((toolCall) => ({
           callId: toolCall.id,
           name: toolCall.name,
           args: toolCall.args,
         }));
+        // Counted before storing, so a storage failure cannot lose usage the provider billed.
         recordAssistantTurn(
           assistantMessage,
           turnUsageReported ? turnUsage : undefined,
@@ -1538,6 +1539,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           turnIssues.issues,
           turnIssues.toolIssues,
         );
+        await store.append(assistantMessage);
 
         if (creditStore && turnUsage.creditsUsed && turnUsage.creditsUsed > 0) {
           await creditStore.deduct(turnUsage.creditsUsed);
@@ -1593,7 +1595,14 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           }
         } catch (error) {
           // The turn is already stored and counted; an abort during its tools only closes it.
-          if (signal.aborted) yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+          if (signal.aborted) {
+            const recordedTurn = loopTurns[loopTurns.length - 1];
+            if (recordedTurn?.message === assistantMessage) {
+              recordedTurn.issues = turnIssues.issues.map((issue) => ({ ...issue }));
+              recordedTurn.toolIssues = turnIssues.toolIssues.map((issue) => ({ ...issue }));
+            }
+            yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+          }
           throw error;
         }
 
@@ -1630,7 +1639,26 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   }
 
-  const eventSource = coalesce ? coalesceOutboundEvents(run(), coalesce) : run();
+  /**
+   * Safety net for the turn_end guarantee: if an unexpected error ends the loop while a turn is
+   * open, the turn is closed with an empty message before loop_end.
+   */
+  async function* closeOpenTurns(source: AsyncGenerator<OutboundEvent>): AsyncGenerator<OutboundEvent> {
+    let openTurn: { turnId: string; turnIndex: number } | undefined;
+    for await (const event of source) {
+      if (event.type === "turn_start") openTurn = { turnId: event.turnId, turnIndex: event.turnIndex };
+      else if (event.type === "turn_end") openTurn = undefined;
+      else if (event.type === "loop_end" && openTurn) {
+        const stopReason = event.reason === "aborted" ? "interrupted" : "error";
+        const message = buildAssistantMessageFromContent(provider.model, [], undefined, stopReason, provider.name);
+        yield { type: "turn_end", agentId, loopId, ...openTurn, message };
+        openTurn = undefined;
+      }
+      yield event;
+    }
+  }
+
+  const eventSource = coalesce ? coalesceOutboundEvents(closeOpenTurns(run()), coalesce) : closeOpenTurns(run());
   const generator = eventSource[Symbol.asyncIterator]();
 
   const loop: NessiLoop = {

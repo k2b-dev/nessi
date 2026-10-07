@@ -4,6 +4,8 @@ import { nessi } from "../src/nessi.js";
 import { defineTool } from "../src/tools.js";
 import { memoryStore } from "../src/stores.js";
 import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
+import { openAICompatible } from "../src/ai/index.js";
+import { fixtureText, stubFetch, textResponse } from "./ai/helpers/fixtures.js";
 import type { OutboundEvent, Provider } from "../src/types.js";
 
 const collect = async (loop: ReturnType<typeof nessi>) => {
@@ -362,5 +364,70 @@ describe("nessi loop lifecycle", () => {
     expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
       .toEqual(["turn_start", "turn_end", "loop_end"]);
     expect(events.at(-1)).toMatchObject({ reason: "error", aggregate: { usage: { total: 5 } } });
+  });
+
+  it("does not run a call the OpenAI-compatible provider filtered, now or on resume", async () => {
+    const originalFetch = globalThis.fetch;
+    let executed = 0;
+    const lookup = defineTool({ name: "lookup", description: "Lookup", inputSchema: z.object({}) })
+      .server(async () => { executed++; return "x"; });
+    const store = memoryStore();
+    try {
+      stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/content-filter-tool.sse"), "text/event-stream"));
+      const provider = openAICompatible({ name: "custom", model: "m", baseURL: "https://example.com/v1" });
+
+      const events = await collect(nessi({ provider, store, systemPrompt: "sys", input: "go", tools: [lookup] }));
+      expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+
+      const resumed = await collect(nessi({ provider, store, systemPrompt: "sys", tools: [lookup], maxTurns: 0 }));
+      expect(resumed.some((event) => event.type === "tool_execution_start")).toBe(false);
+      expect(executed).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("closes the turn and keeps its usage when storing a normal answer fails", async () => {
+    const store = memoryStore();
+    let appends = 0;
+    const failingStore = {
+      load: () => store.load(),
+      append: async (...args: Parameters<typeof store.append>) => {
+        appends++;
+        if (appends > 1) throw new Error("disk full");
+        await store.append(...args);
+      },
+    };
+
+    const events = await collect(nessi({
+      provider: mockProvider([
+        { type: "text", delta: "Answer" },
+        { type: "usage", usage: { input: 4, output: 3, total: 7 } },
+      ]),
+      store: failingStore,
+      systemPrompt: "sys",
+      input: "go",
+    }));
+
+    expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
+      .toEqual(["turn_start", "turn_end", "loop_end"]);
+    expect(events.at(-1)).toMatchObject({ reason: "error", aggregate: { usage: { total: 7 } } });
+  });
+
+  it("records a failed credit deduction in the turn's issues", async () => {
+    const events = await collect(nessi({
+      provider: mockProvider([
+        { type: "text", delta: "part" },
+        { type: "usage", usage: { input: 1, output: 1, total: 2, creditsUsed: 1 } },
+        { type: "error", error: "boom", retryable: true },
+      ]),
+      store: memoryStore(),
+      systemPrompt: "sys",
+      input: "go",
+      creditStore: { remaining: async () => 10, deduct: async () => { throw new Error("ledger offline"); } },
+    }));
+
+    const end = events.at(-1) as Extract<OutboundEvent, { type: "loop_end" }>;
+    expect(end.aggregate.turns[0]?.issues?.some((issue) => issue.message.includes("ledger offline"))).toBe(true);
   });
 });
