@@ -11,6 +11,8 @@
     "./ai": "./src/ai/index.ts",
     "./ai/providers/openai-compatible-transcription": "./src/ai/providers/openai-compatible-transcription.ts",
     "./ai/providers/vllm-realtime-transcription": "./src/ai/providers/vllm-realtime-transcription.ts",
+    "./ai/providers/systemone-decision": "./src/ai/providers/systemone-decision.ts",
+    "./ai/providers/cloudflare-decision": "./src/ai/providers/cloudflare-decision.ts",
     "./ai/providers/openai-compatible": "./src/ai/providers/openai-compatible.ts",
     "./ai/providers/openai": "./src/ai/providers/openai.ts",
     "./ai/providers/openrouter": "./src/ai/providers/openrouter.ts",
@@ -25,7 +27,7 @@
     "test": "bun test",
     "test:ai": "bun test tests/ai",
     "test:core": "bun test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
   },
   "files": [
     "dist",

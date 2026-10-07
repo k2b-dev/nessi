@@ -13,6 +13,8 @@ const sourcePackage = JSON.parse(
 const providerExports = [
   "openai-compatible-transcription",
   "vllm-realtime-transcription",
+  "systemone-decision",
+  "cloudflare-decision",
   "openai-compatible",
   "openai",
   "openrouter",

@@ -80,6 +80,37 @@ for await (const event of speech.stream({ audio: pcm16Chunks, signal })) {
 - A cleanup or correction pass over the final text is application logic: run it
   with `complete()` or `nessi.structured()` on a chat provider.
 
+## Decision models
+
+Use `systemOneDecision(model, { baseURL, apiKey? })` from `@k2b/nessi/ai` for
+decision models behind the System One API (`POST {baseURL}/systemone`), e.g.
+self-hosted Clef, Kev or jev-local, or hosted Jev. Use
+`cloudflareDecision(model, { accountId, apiToken })` for Clef on Workers AI.
+Both return a `DecisionProvider` with `decide()`, not a chat `Provider`.
+
+```ts
+const { answers, usage, raw } = await router.decide({
+  state: ticketText,
+  questions: {
+    urgent: { type: "noul", instructions: "Is this urgent?" },
+    team: { type: "choice", instructions: "Which team?", criteria: { billing: "Payments", technical: "Outages" } },
+    severity: { type: "score", instructions: "How severe?", criteria: ["None", "Minor", "Major"] },
+  },
+  signal,
+});
+if (answers.team.confidence > 0.8) route(answers.team.choice); // "billing" | "technical"
+```
+
+- Answers: `noul` has `probability` and `value`; `choice` has `choice`,
+  `confidence`, `probabilities`; `score` has `score`, `level`, `confidence`,
+  `probabilities` (array by level). `raw` is the unchanged provider response.
+- Option IDs are typed from inline questions; for variables use
+  `satisfies DecisionQuestions` or `as const`.
+- Use decisions before or around the agent loop (pick tools, triage, guard);
+  there is no loop-level decision hook. Choose thresholds per use case.
+- Invalid or missing answers, HTTP and connection errors reject; no retries.
+  Limits (questions, options, levels, images, languages) depend on the model.
+
 ## Structured output support
 
 Most consumers should use root `nessi.structured()` for typed structured

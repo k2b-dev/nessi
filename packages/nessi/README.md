@@ -356,12 +356,98 @@ immediately. Stopping the iteration early closes it too. Nessi asks the audio
 iterable to stop, but cannot interrupt a pending read, so stop the microphone with
 the same signal. There are no automatic retries or reconnects.
 
+## Decision models
+
+Decision models such as Cloudflare's Clef or Kev answer
+typed questions about a state with a probability for every option, in one forward
+pass and without generating text. They are fast and bounded, which makes them a
+good fit for routing, triage and checks before an LLM acts. Nessi speaks the
+System One API (`POST /v1/systemone`) that these models share:
+
+```ts
+import { systemOneDecision } from "@k2b/nessi/ai";
+
+const router = systemOneDecision("clef-flash", {
+  baseURL: "https://decide.example.com/v1",
+  apiKey: process.env.DECISION_API_KEY,
+});
+
+const { answers } = await router.decide({
+  state: "Checkout has been failing for every customer for the last hour.",
+  questions: {
+    urgent: { type: "noul", instructions: "Is this support request urgent?" },
+    team: {
+      type: "choice",
+      instructions: "Which team should handle this request?",
+      criteria: { billing: "Payments and refunds", technical: "Outages and errors", sales: "Plans" },
+    },
+    severity: { type: "score", instructions: "How severe is the impact?", criteria: ["None", "Minor", "Major", "Critical"] },
+  },
+});
+
+answers.urgent.probability; // 0.91, `answers.urgent.value` is true at 0.5 or more
+answers.team.choice;        // typed as "billing" | "technical" | "sales"
+answers.team.confidence;    // probability of the chosen option
+answers.severity.level;     // most likely level index, `score` is the weighted level
+```
+
+Question types:
+
+- `noul`: yes or no; optional `criteria: { true, false }` describe both answers.
+  The answer has `probability` (of yes) and `value`.
+- `choice`: `criteria` maps option IDs to descriptions (or `null`). The answer
+  has `choice`, `confidence` and `probabilities` per option.
+- `score`: `criteria` lists ordered levels, lowest first. The answer has the
+  weighted `score`, the most likely `level`, `confidence` and `probabilities`
+  per level index.
+
+Option IDs are inferred from inline questions. For questions stored in a
+variable, keep the literal types with `satisfies DecisionQuestions` or
+`as const`. `state` accepts text or JSON-serializable data. Optional `images`
+(`{ data: base64, mediaType }`) are sent as data URLs; only multimodal models
+such as Clef accept them.
+
+The result contains `model`, the typed `answers`, `usage` and `raw`, the
+unchanged provider response for fields Nessi does not map. Nessi checks that
+every question has a valid answer and otherwise rejects; it does not enforce
+provider limits such as the number of questions or options, which differ
+between models. HTTP, connection and malformed-response errors reject the
+promise, `signal` cancels with its reason, and there are no automatic retries.
+
+For Clef on Cloudflare Workers AI, use the preset:
+
+```ts
+import { cloudflareDecision } from "@k2b/nessi/ai";
+
+const router = cloudflareDecision("clef-flash", {
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID!,
+  apiToken: process.env.CLOUDFLARE_API_TOKEN!,
+});
+```
+
+A decision model does not replace the agent loop; it decides before the loop
+acts. For example, pick the tools for a turn and fall back to all tools when
+the model is unsure:
+
+```ts
+const { answers } = await router.decide({
+  state: userMessage,
+  questions: {
+    area: { type: "choice", instructions: "What is the request about?", criteria: { calendar: null, files: null, other: null } },
+  },
+});
+
+const tools = answers.area.confidence >= 0.7 ? toolsByArea[answers.area.choice] : allTools;
+const loop = nessi({ provider, store, systemPrompt, input: userMessage, tools });
+```
+
 ## Focused provider imports
 
 ```ts
 import { anthropic } from "@k2b/nessi/ai/providers/anthropic";
 import { openai } from "@k2b/nessi/ai/providers/openai";
 import { openAICompatibleTranscription } from "@k2b/nessi/ai/providers/openai-compatible-transcription";
+import { systemOneDecision } from "@k2b/nessi/ai/providers/systemone-decision";
 ```
 
 ## Features

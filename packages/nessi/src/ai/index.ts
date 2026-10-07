@@ -1,6 +1,28 @@
 export { completeFromStream } from "./complete-from-stream.js";
 export { openAICompatibleTranscription } from "./providers/openai-compatible-transcription.js";
 export type { OpenAICompatibleTranscriptionOptions } from "./providers/openai-compatible-transcription.js";
+export { systemOneDecision } from "./providers/systemone-decision.js";
+export type { SystemOneDecisionOptions } from "./providers/systemone-decision.js";
+export { cloudflareDecision } from "./providers/cloudflare-decision.js";
+export type { CloudflareDecisionOptions } from "./providers/cloudflare-decision.js";
+export type {
+  ChoiceAnswer,
+  ChoiceQuestion,
+  DecisionAnswer,
+  DecisionAnswers,
+  DecisionImage,
+  DecisionProvider,
+  DecisionQuestion,
+  DecisionQuestions,
+  DecisionRequest,
+  DecisionResult,
+  DecisionText,
+  NoulAnswer,
+  NoulQuestion,
+  ScoreAnswer,
+  ScoreQuestion,
+  SystemOneResponse,
+} from "./decision.js";
 export { vllmRealtimeTranscription } from "./providers/vllm-realtime-transcription.js";
 export type { VllmRealtimeTranscriptionOptions } from "./providers/vllm-realtime-transcription.js";
 export type {

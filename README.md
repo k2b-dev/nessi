@@ -26,6 +26,10 @@ separate `transcribe()` API. Configure the endpoint and model for Scaleway,
 OpenAI or another compatible service. For live audio, `vllmRealtimeTranscription()`
 streams text while the user speaks. See [audio transcription](packages/nessi/README.md#audio-transcription).
 
+For fast typed routing and checks, `systemOneDecision()` and `cloudflareDecision()`
+query decision models such as Clef through the System One API. See
+[decision models](packages/nessi/README.md#decision-models).
+
 ```ts
 import { nessi, memoryStore } from "@k2b/nessi";
 import { openrouter } from "@k2b/nessi/ai";
