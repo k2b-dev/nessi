@@ -362,3 +362,41 @@ describe("nessi history after an aborted tool call", () => {
     expect(entries.some((entry) => entry.message.role === "tool_result")).toBe(false);
   });
 });
+
+describe("nessi resume after an interrupted turn", () => {
+  it("does not execute tool calls from a turn the user aborted mid-answer", async () => {
+    let executed = false;
+    const echo = defineTool({
+      name: "echo",
+      description: "Echoes input",
+      inputSchema: z.object({ text: z.string() }),
+    }).server(async () => {
+      executed = true;
+      return "x";
+    });
+    const store = await storeWithHistory([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      {
+        role: "assistant",
+        stopReason: "interrupted",
+        content: [{ type: "tool_call", id: "c1", name: "echo", args: { text: "a" } }],
+      },
+    ]);
+    let sentResult: unknown;
+    const provider = mockProvider([
+      { type: "text", delta: "Okay." },
+      { type: "usage", usage: { input: 1, output: 1, total: 2 } },
+    ], {
+      onRequest: (request) => {
+        sentResult = request.messages.find((message) => message.role === "tool_result");
+      },
+    });
+
+    const events = await collectEvents(nessi({ provider, store, systemPrompt: "sys", tools: [echo] }));
+
+    expect(executed).toBe(false);
+    expect(events.some((event) => event.type === "tool_execution_start")).toBe(false);
+    expect(sentResult).toMatchObject({ callId: "c1", isError: true });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "stop" });
+  });
+});

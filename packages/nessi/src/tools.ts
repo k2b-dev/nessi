@@ -29,6 +29,10 @@ export const defineTool = <TInput extends z.ZodType, TOutput extends z.ZodType =
       return { kind: "server" as const, def, execute };
     },
     client(execute: (input: z.infer<TInput>) => z.infer<TOutput> | Promise<z.infer<TOutput>>) {
+      // Client tools run in the application, which owns their confirmation UI.
+      if (def.needsApproval) {
+        throw new Error(`Tool "${def.name}": needsApproval is only supported for server tools; ask for confirmation in the client tool itself.`);
+      }
       return { kind: "client" as const, def, execute };
     },
   };

@@ -175,6 +175,7 @@ export type ToolDefinition<TInput extends z.ZodType = z.ZodType, TOutput extends
   description: string;
   inputSchema: TInput;
   outputSchema?: TOutput;
+  /** Ask the app for approval before a server tool runs. Not supported on client tools. */
   needsApproval?: boolean;
   timeoutMs?: number | false;
   /** Derive a smaller representation that later loops send to the provider instead of the full result. */
@@ -225,7 +226,8 @@ export type NessiOptions = {
    * User input for this loop. When omitted, the loop runs directly over the existing
    * store history: a trailing user message acts as the prompt, and unresolved tool_call
    * blocks on the trailing assistant message are resumed (executed or re-requested)
-   * before the next provider turn. Push matching approval_response / tool_result events
+   * before the next provider turn. Calls from an aborted (`"interrupted"`) or provider-stopped
+   * (`"error"`) message are not resumed; they reach the provider as interrupted calls. Push matching approval_response / tool_result events
    * before iterating to seed a resumed loop.
    */
   input?: Input;

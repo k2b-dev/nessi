@@ -79,3 +79,28 @@ describe("toolToJsonSchema", () => {
     expect((schema.parameters as any).properties.formal).toBeDefined();
   });
 });
+
+describe("client tool approval", () => {
+  it("rejects needsApproval on client tools", () => {
+    const def = defineTool({
+      name: "confirm",
+      description: "Needs approval",
+      inputSchema: z.object({}),
+      needsApproval: true,
+    });
+
+    expect(() => def.client(() => ({}))).toThrow('Tool "confirm": needsApproval is only supported for server tools');
+    expect(def.server(async () => ({})).kind).toBe("server");
+  });
+
+  it("rejects hand-built client tools with needsApproval in nessi()", async () => {
+    const { nessi } = await import("../src/nessi.js");
+    const { memoryStore } = await import("../src/stores.js");
+    const { mockProvider } = await import("./mock-provider.js");
+    const base = defineTool({ name: "confirm", description: "x", inputSchema: z.object({}) });
+    const tool = { kind: "client" as const, def: { ...base, needsApproval: true }, execute: () => ({}) };
+
+    expect(() => nessi({ provider: mockProvider([]), store: memoryStore(), systemPrompt: "sys", input: "go", tools: [tool] }))
+      .toThrow("needsApproval is only supported for server tools");
+  });
+});

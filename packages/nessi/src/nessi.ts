@@ -58,6 +58,10 @@ const createToolSnapshot = (value: unknown): ToolSnapshot => {
   if (!Array.isArray(value)) throw new Error("Tool resolver must return an array");
 
   const tools = [...value] as Tool[];
+  const approvalClientTool = tools.find((tool) => tool.kind === "client" && tool.def.needsApproval);
+  if (approvalClientTool) {
+    throw new Error(`Tool "${approvalClientTool.def.name}": needsApproval is only supported for server tools.`);
+  }
   const names = tools.map((tool) => tool.def.name);
   if (new Set(names).size !== names.length) {
     const duplicate = names.find((name, index) => names.indexOf(name) !== index);
@@ -1151,8 +1155,10 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     const entry = entries[lastAssistantIdx]!;
     if (entry.kind === "summary") return;
     const assistantMessage = entry.message as AssistantMessage;
-    // Calls from a response the provider stopped itself are never executed.
-    if (assistantMessage.stopReason === "error") return;
+    // Calls from a response the provider stopped, or that the user aborted while it was still
+    // being generated, are never executed. They reach the provider as interrupted calls instead.
+    const stopped = assistantMessage.stopReason;
+    if (stopped === "error" || stopped === "interrupted" || stopped === "aborted") return;
     const toolCallBlocks = assistantMessage.content.filter((block): block is ToolCallBlock => block.type === "tool_call");
     if (toolCallBlocks.length === 0) return;
 

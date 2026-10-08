@@ -11,7 +11,7 @@ debug output:
 - `turn_end` reports each internal provider turn.
 - `block_end` with `block.type === "tool_call"` reports final executable provider tool calls.
 - `tool_execution_start` / `tool_execution_end` report Nessi's tool execution attempts.
-- `tool_action_request` asks the app for approval, client-side tool output, or a custom approval inside a server tool.
+- `tool_action_request` asks the app for approval, client-side tool output, or a custom approval inside a server tool. `needsApproval` is for server tools only; client tools run in the app, which asks for confirmation itself, and `defineTool().client()` rejects `needsApproval: true`.
 - `issue` reports provider errors, timeouts, malformed/cancelled tool streams, and tool execution failures.
 - `loop_end.aggregate` reports the complete logical loop after all internal turns.
 
