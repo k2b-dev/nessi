@@ -146,6 +146,18 @@ Top-level client tools validate pushed results against their `outputSchema`.
 Nested `ctx.requestClientTool()` calls also validate args and output when the
 requested client tool name is registered in `tools`.
 
+Root `nessi()` loops recover from `malformed_tool_call` by appending a corrective
+user message to the session history and giving the model another turn. The
+message asks for valid JSON and smaller arguments; valid calls from the same
+turn still execute before the correction. No tool result is invented for a
+call that never became executable.
+
+Recovery permits two retries after consecutive malformed turns, within
+`maxTurns`. A turn without malformed calls resets the recovery limit. If both
+retries fail, the loop reports an issue and ends with `"error"`. Cancelled calls
+and provider-stopped responses do not trigger recovery. Provider-only `/ai`
+streams report issues without managing retries or executing tools.
+
 ## Dynamic root-loop tools
 
 Use a resolver when the active root-loop tools depend on application state:
@@ -263,7 +275,11 @@ if (
 }
 ```
 
-`complete()` throws on connection errors, non-OK HTTP responses, and invalid provider JSON.
+`complete()` throws on connection errors, non-OK HTTP responses, invalid
+provider JSON, and configured provider timeouts. Timeout errors carry
+`kind: "timeout"`, `scope: "provider_first_byte"` or `"provider_idle"`, and
+`retryable: true`. Caller cancellation preserves the signal's reason. See
+[Provider timeouts](providers.md#provider-timeouts).
 
 ## Context overflow
 

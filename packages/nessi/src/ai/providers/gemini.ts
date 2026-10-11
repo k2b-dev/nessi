@@ -1,4 +1,5 @@
-import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
@@ -211,14 +212,12 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
 
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const requestId = createRequestId();
-      const response = await fetch(urlFor("generateContent"), {
+      const response = await fetchCompleteResponse(urlFor("generateContent"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildBody(request)),
         signal: request.signal,
-      }).catch((error: unknown) => {
-        throw new Error(formatConnectionError("gemini", error));
-      });
+      }, "gemini", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("gemini", response);

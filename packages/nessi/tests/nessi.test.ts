@@ -422,14 +422,14 @@ describe("nessi core loop", () => {
 
   it("classifies malformed half-open tool streams without durable tool UI events", async () => {
     const store = memoryStore();
-    const provider = mockProvider([
+    const provider = mockProviderMultiTurn((_request, index) => index === 0 ? [
       { type: "tool_start", callId: "c1", name: "card" },
       { type: "tool_delta", callId: "c1", argsDelta: "{\"title\":\"Hi\"" },
       { type: "text", delta: "</invoke>" },
       { type: "text", delta: "</think>" },
       { type: "tool_call", callId: "c1", name: "card", args: {} },
       { type: "usage", usage: { input: 10, output: 3, total: 13 }, finishReason: "tool_use" },
-    ]);
+    ] : []);
 
     const events = await collectEvents(
       nessi({

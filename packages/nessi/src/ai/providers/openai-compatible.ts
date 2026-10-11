@@ -1,4 +1,5 @@
-import { formatConnectionError, isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
@@ -318,14 +319,12 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       };
       if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
 
-      const response = await fetch(`${baseURL}/chat/completions`, {
+      const response = await fetchCompleteResponse(`${baseURL}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(withExtraBody(body, request, config)),
         signal: request.signal,
-      }).catch((error: unknown) => {
-        throw new Error(formatConnectionError(config.name, error));
-      });
+      }, config.name, config.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError(config.name, response);

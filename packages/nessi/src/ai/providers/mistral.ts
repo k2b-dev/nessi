@@ -1,4 +1,5 @@
-import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
@@ -261,7 +262,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
       applyReasoning(body, request, options);
 
-      const response = await fetch(`${baseURL}/chat/completions`, {
+      const response = await fetchCompleteResponse(`${baseURL}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -269,9 +270,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
         },
         body: JSON.stringify(withExtraBody(body, request, options)),
         signal: request.signal,
-      }).catch((error: unknown) => {
-        throw new Error(formatConnectionError("mistral", error));
-      });
+      }, "mistral", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("mistral", response);

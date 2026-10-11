@@ -1,5 +1,6 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
@@ -259,7 +260,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const temperature = resolveTemperature(request, options);
       if (temperature !== undefined) body.temperature = temperature;
 
-      const response = await fetch(`${baseURL}/v1/messages`, {
+      const response = await fetchCompleteResponse(`${baseURL}/v1/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -268,9 +269,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         },
         body: JSON.stringify(withExtraBody(body, request, options)),
         signal: request.signal,
-      }).catch((error: unknown) => {
-        throw new Error(formatConnectionError("anthropic", error));
-      });
+      }, "anthropic", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("anthropic", response);

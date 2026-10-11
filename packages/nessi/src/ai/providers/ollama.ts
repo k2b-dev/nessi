@@ -1,5 +1,6 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
 import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
@@ -168,14 +169,12 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       if (generation) body.options = generation;
       applyThink(body, request, options);
 
-      const response = await fetch(`${baseURL}/api/chat`, {
+      const response = await fetchCompleteResponse(`${baseURL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(withExtraBody(body, request, options)),
         signal: request.signal,
-      }).catch((error: unknown) => {
-        throw new Error(formatConnectionError("ollama", error));
-      });
+      }, "ollama", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("ollama", response);

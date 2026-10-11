@@ -187,7 +187,7 @@ Useful options:
 - `contextWindow` when the app wants overflow heuristics
 - `creditsPerInputToken` and `creditsPerOutputToken` for cost accounting
 - `normalizeToolCallIds: "strict9"` for providers that need short alphanumeric tool IDs
-- `timeouts.firstByteMs` and `timeouts.idleMs` for streaming timeout policy
+- `timeouts.firstByteMs` and `timeouts.idleMs` for `complete()` and `stream()` timeouts
 
 ## OpenRouter
 
@@ -240,7 +240,7 @@ still uses this opt-out; use `openAICompatible()` when you want thinking from a
 vLLM endpoint. Do not log reasoning content or raise timeouts to compensate for
 missing visible progress.
 
-Use `timeouts` for vLLM/OpenAI-compatible streams that may stall or emit malformed partial tool calls:
+Use `timeouts` for vLLM/OpenAI-compatible requests that may stall:
 
 ```ts
 const localVllm = vllm("Qwen/Qwen3-32B", {
@@ -263,9 +263,24 @@ const provider = ollama("llama3.1", {
 });
 ```
 
-Ollama is useful for local development and offline workflows. It streams NDJSON internally, but consumers still receive normalized `StreamEvent` values. It supports the same `timeouts.firstByteMs` and `timeouts.idleMs` streaming controls.
+Ollama is useful for local development and offline workflows. It streams NDJSON internally, but consumers still receive normalized `StreamEvent` values. It supports the same `timeouts.firstByteMs` and `timeouts.idleMs` controls for `complete()` and `stream()`.
 
 Ollama's default context depends on the server's memory (4k to 256k). Set `contextWindow` to the size you want; Nessi then sends it as `options.num_ctx`, so Ollama and compaction use the same window. Without it, Nessi assumes 128k and sends nothing.
+
+## Provider timeouts
+
+All chat adapters support `timeouts.firstByteMs` and `timeouts.idleMs` in
+provider options. Unset or non-positive values disable the corresponding
+timeout.
+
+For `complete()`, `firstByteMs` bounds the wait for response headers. After
+headers arrive, `idleMs` bounds each body read, including the first read and
+HTTP error bodies. Each chunk resets the idle timer; it is not a total response
+deadline. Timeouts reject with an `Error` carrying `kind: "timeout"`,
+`scope: "provider_first_byte"` or `"provider_idle"`, and `retryable: true`.
+Pass a request `signal` for caller-controlled cancellation; its reason is
+preserved. These options apply to chat providers, not the separate
+transcription or decision APIs.
 
 ## Anthropic
 

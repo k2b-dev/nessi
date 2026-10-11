@@ -1213,6 +1213,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     let providerTurn = 0;
     let eventTurnIndex = 0;
     let compactionRetried = false;
+    let consecutiveMalformedTurns = 0;
     const prepareProviderMessages = (sourceEntries: StoreEntry[]): Message[] => {
       const rawMessages = sourceEntries.map((entry) => entry.message);
       const projectedMessages = closeUnansweredToolCalls(projectHistoricalToolResults(rawMessages, loopId));
@@ -1264,6 +1265,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         if (steeringApplied) {
           providerTurn = 0;
           compactionRetried = false;
+          consecutiveMalformedTurns = 0;
         }
 
         if (providerTurn >= maxTurns) {
@@ -1585,12 +1587,16 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return;
         }
 
-        if (toolCalls.length === 0) {
+        const malformedIssues = turnIssues.toolIssues.filter((issue) => issue.kind === "malformed_tool_call");
+        consecutiveMalformedTurns = malformedIssues.length > 0 ? consecutiveMalformedTurns + 1 : 0;
+
+        if (toolCalls.length === 0 && malformedIssues.length === 0) {
           yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
           const lateSteeringApplied = yield* applyPendingSteering();
           if (lateSteeringApplied) {
             providerTurn = 0;
             compactionRetried = false;
+            consecutiveMalformedTurns = 0;
             continue;
           }
           yield loopEndEvent("stop");
@@ -1629,6 +1635,34 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           throw error;
         }
 
+        let malformedRetriesExhausted = false;
+        if (malformedIssues.length > 0 && !terminalToolCompleted) {
+          if (consecutiveMalformedTurns > 2) {
+            const issue: NessiIssue = {
+              kind: "runtime_error",
+              message: "Tool calls are still malformed after two recovery attempts. Stopping the loop.",
+              retryable: false,
+            };
+            recordIssue(issue, turnIssues);
+            yield issueEvent(issue, turnCtx);
+            malformedRetriesExhausted = true;
+          } else {
+            // No executable call exists to pair with a tool result. A user message keeps the
+            // provider transcript valid, including calls with no usable name or id.
+            await store.append({
+              role: "user",
+              content: [{
+                type: "text",
+                text: [
+                  "Nessi could not execute these malformed tool calls:",
+                  ...malformedIssues.map((issue) => issue.message),
+                  "Retry with a valid tool name and a complete JSON object. The arguments may have been truncated; use smaller arguments, for example one file per call. Do not repeat calls that already succeeded.",
+                ].join("\n"),
+              }],
+            });
+          }
+        }
+
         const recordedTurn = loopTurns[loopTurns.length - 1];
         if (recordedTurn?.message === assistantMessage) {
           recordedTurn.issues = turnIssues.issues.map((issue) => ({ ...issue }));
@@ -1636,11 +1670,16 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         }
 
         yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
+        if (malformedRetriesExhausted) {
+          yield loopEndEvent("error");
+          return;
+        }
         if (terminalToolCompleted) {
           const lateSteeringApplied = yield* applyPendingSteering();
           if (lateSteeringApplied) {
             providerTurn = 0;
             compactionRetried = false;
+            consecutiveMalformedTurns = 0;
             continue;
           }
           yield loopEndEvent("stop");

@@ -73,6 +73,19 @@ itself stops an answer (`finishReason: "error"`, e.g. a content or safety
 filter), its tool calls are not executed, not even by a later resume, and the
 loop ends with `"error"`. The final `loop_end` event includes `aggregate`, which groups assistant turns, executable tool calls, tool results, validation/execution errors, malformed or cancelled tool streams, summed usage, and timing for the complete logical loop. `aggregate.timing.totalElapsedMs` is model generation plus active tool execution; approval/client-tool waits are tracked separately as `aggregate.timing.actionWaitMs`. Helper exports such as `mergeUsage()`, `cloneLoopAggregate()`, and `mergeLoopAggregates()` are available from `@k2b/nessi`.
 
+## Malformed tool calls
+
+When a provider emits malformed tool arguments, `nessi()` reports a
+`malformed_tool_call` issue, adds a corrective user message to the session
+history, and gives the model another turn to retry with smaller, valid JSON
+arguments. The malformed call is never executed. Valid calls from the same
+response still run, and their results precede the correction.
+
+Recovery allows two retries after consecutive malformed turns, subject to
+`maxTurns`. A turn without malformed calls resets this limit. If both retries
+fail, the loop reports an issue and ends with `"error"`. Cancelled calls and
+responses stopped by the provider do not trigger recovery.
+
 ## Dynamic tools
 
 Pass a resolver when the active tools depend on application state:
@@ -273,6 +286,19 @@ for await (const event of provider.stream({ messages })) {
   }
 }
 ```
+
+## Provider timeouts
+
+Set `timeouts.firstByteMs` and `timeouts.idleMs` in chat provider options to
+bound waits in `complete()` and `stream()`. Unset or non-positive values disable
+the corresponding timeout.
+
+For `complete()`, `firstByteMs` bounds the wait for response headers; `idleMs`
+bounds each body read, starting immediately after headers. Progress resets the
+idle timer, so it does not limit the total response duration. These limits also
+apply when reading HTTP error responses. A timeout rejects with an `Error`
+carrying `kind: "timeout"`, `scope: "provider_first_byte"` or `"provider_idle"`,
+and `retryable: true`. A caller's `signal` cancels with its original reason.
 
 ## Reasoning effort
 
