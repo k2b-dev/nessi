@@ -277,7 +277,7 @@ if (
 
 `complete()` throws on connection errors, non-OK HTTP responses, invalid
 provider JSON, and configured provider timeouts. Timeout errors carry
-`kind: "timeout"`, `scope: "provider_first_byte"` or `"provider_idle"`, and
+`kind: "timeout"`, `scope: "provider_total"` or `"provider_idle"`, and
 `retryable: true`. Caller cancellation preserves the signal's reason. See
 [Provider timeouts](providers.md#provider-timeouts).
 

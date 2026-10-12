@@ -275,8 +275,12 @@ export type RawStreamEvent =
   | { type: "error"; error: string; retryable: boolean; contextOverflow?: boolean; overflowRatio?: number };
 
 export type ProviderTimeouts = {
+  /** Streaming only: request start through the first response-body chunk. */
   firstByteMs?: number;
+  /** Each body-read gap; native complete() starts this timer after response headers. */
   idleMs?: number;
+  /** Native complete() only: request start through the entire response body. */
+  totalMs?: number;
 };
 
 export type Provider = {

@@ -289,16 +289,28 @@ for await (const event of provider.stream({ messages })) {
 
 ## Provider timeouts
 
-Set `timeouts.firstByteMs` and `timeouts.idleMs` in chat provider options to
-bound waits in `complete()` and `stream()`. Unset or non-positive values disable
-the corresponding timeout.
+Set `timeouts` in chat provider options to bound waits. Unset or non-positive
+values disable the corresponding timeout.
 
-For `complete()`, `firstByteMs` bounds the wait for response headers; `idleMs`
-bounds each body read, starting immediately after headers. Progress resets the
-idle timer, so it does not limit the total response duration. These limits also
-apply when reading HTTP error responses. A timeout rejects with an `Error`
-carrying `kind: "timeout"`, `scope: "provider_first_byte"` or `"provider_idle"`,
-and `retryable: true`. A caller's `signal` cancels with its original reason.
+| Option | `stream()` and `completeFromStream()` | Native `complete()` |
+| --- | --- | --- |
+| `firstByteMs` | Request start through the first response-body chunk, which may precede the first token | Ignored |
+| `idleMs` | Each body-read gap after the first chunk | Each body-read gap, starting after response headers |
+| `totalMs` | Ignored | Request start through the entire response body |
+
+Native endpoints often send headers only after generating the whole answer.
+`totalMs` includes that generation time and does not reset when body chunks
+arrive. `idleMs` resets on each chunk, so it detects stalled transfers without
+limiting total duration. Both limits also apply to HTTP error responses.
+
+**Migrating from 0.17.1:** `firstByteMs` no longer limits native `complete()`
+calls. Set `totalMs` to the maximum duration you want for those calls. Without
+`totalMs`, the wait for native response headers has no provider timeout; pass
+a request `signal` if the caller owns the deadline.
+
+A native timeout rejects with an `Error` carrying `kind: "timeout"`,
+`scope: "provider_total"` or `"provider_idle"`, and `retryable: true`. Caller
+cancellation preserves the signal's original reason.
 
 ## Reasoning effort
 

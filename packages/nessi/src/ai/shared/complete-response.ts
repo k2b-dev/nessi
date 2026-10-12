@@ -2,7 +2,7 @@ import type { ProviderTimeouts } from "../types.js";
 import { formatConnectionError } from "./errors.js";
 import type { ByteStreamReader } from "./sse.js";
 
-/** Buffer a non-streaming response, bounding headers and each body read separately. */
+/** Buffer a native response with a total deadline and idle limits after headers. */
 export const fetchCompleteResponse = async (
   url: string,
   init: RequestInit,
@@ -17,22 +17,22 @@ export const fetchCompleteResponse = async (
   });
   const abortExternal = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", abortExternal, { once: true });
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let totalTimeout: ReturnType<typeof setTimeout> | undefined;
+  let idleTimeout: ReturnType<typeof setTimeout> | undefined;
   let reader: (ByteStreamReader & { releaseLock(): void }) | undefined;
 
-  const armTimeout = (scope: "provider_first_byte" | "provider_idle", timeoutMs?: number) => {
-    clearTimeout(timeout);
+  const scheduleTimeout = (scope: "provider_total" | "provider_idle", timeoutMs?: number) => {
     if (!timeoutMs || timeoutMs <= 0) return;
-    timeout = setTimeout(() => {
+    return setTimeout(() => {
       controller.abort(Object.assign(
-        new Error(`${label} response ${scope === "provider_first_byte" ? "first byte" : "idle"} timeout after ${timeoutMs}ms.`),
+        new Error(`${label} response ${scope === "provider_total" ? "total" : "idle"} timeout after ${timeoutMs}ms.`),
         { kind: "timeout", scope, retryable: true },
       ));
     }, timeoutMs);
   };
 
   try {
-    armTimeout("provider_first_byte", timeouts?.firstByteMs);
+    totalTimeout = scheduleTimeout("provider_total", timeouts?.totalMs);
     const response = await Promise.race([
       fetch(url, { ...init, signal: controller.signal }).then((response) => {
         // A response can arrive just after an abort, including with custom fetch implementations.
@@ -47,14 +47,14 @@ export const fetchCompleteResponse = async (
       }),
       aborted,
     ]);
-    clearTimeout(timeout);
     reader = response.body?.getReader();
     if (!reader) return response;
 
     const decoder = new TextDecoder();
     let text = "";
     while (true) {
-      armTimeout("provider_idle", timeouts?.idleMs);
+      clearTimeout(idleTimeout);
+      idleTimeout = scheduleTimeout("provider_idle", timeouts?.idleMs);
       const { done, value } = await Promise.race([reader.read(), aborted]);
       if (done) break;
       text += decoder.decode(value, { stream: true });
@@ -66,7 +66,8 @@ export const fetchCompleteResponse = async (
     void reader?.cancel?.(error).catch(() => {});
     throw error;
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(totalTimeout);
+    clearTimeout(idleTimeout);
     signal?.removeEventListener("abort", abortExternal);
     reader?.releaseLock();
   }
