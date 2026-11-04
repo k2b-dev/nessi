@@ -1016,6 +1016,12 @@ describe("nessi core loop", () => {
   });
 
   it("buffers out-of-order inbound events by callId", async () => {
+    const numberedToast = defineTool({
+      name: "toast",
+      description: "Show toast",
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ shown: z.boolean(), which: z.number() }),
+    }).client(() => ({ shown: true, which: 0 }));
     const provider = mockProviderMultiTurn((request, callIndex) => {
       if (callIndex === 0) {
         return [
@@ -1036,7 +1042,7 @@ describe("nessi core loop", () => {
       provider,
       systemPrompt: "test",
       store: memoryStore(),
-      tools: [toastTool],
+      tools: [numberedToast],
       input: "Run two client tools",
     });
 

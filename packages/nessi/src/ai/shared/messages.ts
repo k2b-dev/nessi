@@ -1,3 +1,4 @@
+import { invalidRequestError } from "./errors.js";
 import type {
   AssistantMessage,
   AssistantContentBlock,
@@ -61,7 +62,7 @@ export const assertOnlySupportedFiles = (
   for (const part of parts) {
     if (typeof part === "string" || part.type === "text") continue;
     if (supportImages && part.mediaType.startsWith("image/")) continue;
-    throw new Error(`${label} does not support input file type '${part.mediaType}'.`);
+    throw invalidRequestError(`${label} does not support input file type '${part.mediaType}'.`);
   }
 };
 

@@ -1,3 +1,4 @@
+import { ProviderError } from "./errors.js";
 import { safeJsonParse, stringifyJson } from "./json.js";
 import type {
   AssistantBlockKind,
@@ -276,10 +277,15 @@ export async function* normalizeProviderStream(
             break;
           }
 
-          if (tool && !parseArgsText(tool.argsText).ok) {
+          // Adapters pass the arguments they parsed; only an object may become an executable call.
+          if ((tool && !parseArgsText(tool.argsText).ok) || !isRecord(event.args)) {
             malformedCallIds.add(event.callId);
             pending.delete(event.callId);
-            yield* emitIssue(toolIssue("malformed_tool_call", tool, "invalid_tool_arguments"));
+            yield* emitIssue(toolIssue(
+              "malformed_tool_call",
+              tool ?? { callId: event.callId, name: event.name, argsText: "", argsDeltas: [] },
+              "invalid_tool_arguments",
+            ));
             break;
           }
 
@@ -317,7 +323,8 @@ export async function* normalizeProviderStream(
           if (event.finishReason && pending.size > 0) {
             yield* cancelPending("stream_ended_before_tool_call");
           }
-          yield* closeOpenBlock();
+          // Interim usage (no finish reason) arrives mid-answer; it must not split the open block.
+          if (event.finishReason) yield* closeOpenBlock();
           yield {
             ...event,
             finishReason: event.finishReason === "tool_use" && emittedToolCallCount === 0 && issueCount > 0
@@ -334,6 +341,9 @@ export async function* normalizeProviderStream(
             kind: "provider_error",
             message: event.error,
             retryable: event.retryable,
+            ...(event.status !== undefined ? { status: event.status } : {}),
+            ...(event.code !== undefined ? { code: event.code } : {}),
+            ...(event.retryAfterMs !== undefined ? { retryAfterMs: event.retryAfterMs } : {}),
             contextOverflow: event.contextOverflow,
             overflowRatio: event.overflowRatio,
           });
@@ -367,7 +377,8 @@ export async function* normalizeProviderStream(
     yield* emitIssue({
       kind: "provider_error",
       message: error instanceof Error ? error.message : String(error),
-      retryable: true,
+      // A request nessi could not build fails the same way on every attempt.
+      retryable: error instanceof ProviderError ? error.retryable : true,
     });
     return;
   }

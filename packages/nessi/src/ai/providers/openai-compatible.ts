@@ -1,7 +1,7 @@
-import { isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -53,6 +53,7 @@ type SSEChunk = {
     index: number;
     delta: {
       content?: string | null;
+      refusal?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
       reasoning_details?: ReasoningDetail[];
@@ -65,6 +66,7 @@ type SSEChunk = {
     message?: {
       role?: string;
       content?: string | null;
+      refusal?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
       reasoning_details?: ReasoningDetail[];
@@ -77,7 +79,9 @@ type SSEChunk = {
     finish_reason: string | null;
   }>;
   usage?: {
+    /** Includes `prompt_tokens_details.cached_tokens`. */
     prompt_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
     completion_tokens?: number;
     total_tokens?: number;
   };
@@ -203,8 +207,11 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
 
 const usageFromChunk = (chunk: SSEChunk, config: OpenAICompatibleConfig): Usage | undefined => {
   if (!chunk.usage) return undefined;
+  const usage = makeUsage(chunk.usage.prompt_tokens ?? 0, chunk.usage.completion_tokens ?? 0);
+  const cacheRead = chunk.usage.prompt_tokens_details?.cached_tokens;
+  if (typeof cacheRead === "number") usage.cacheRead = cacheRead;
   return applyCredits(
-    makeUsage(chunk.usage.prompt_tokens ?? 0, chunk.usage.completion_tokens ?? 0),
+    usage,
     config.creditsPerInputToken,
     config.creditsPerOutputToken,
   );
@@ -219,10 +226,16 @@ const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleCon
 };
 
 const parseCompletionResponse = async (response: Response, config: OpenAICompatibleConfig): Promise<GenerateResult> => {
-  const payload = safeJsonParse<SSEChunk>(await response.text());
-  if (!payload) throw new Error(`${config.name} returned invalid JSON.`);
-
+  const payload = parseJsonRecord<SSEChunk>(await response.text());
+  if (!payload) throw invalidResponseError(config.name);
+  // Some gateways answer HTTP 200 with an error body.
+  const envelope = errorEnvelope(config.name, payload);
+  if (envelope) throw providerError(envelope);
   const choice = payload.choices?.[0];
+  // An empty message is a valid answer; a choice with neither a message nor a finish reason is not.
+  if (!choice || (!isRecord(choice.message) && !choice.finish_reason)) {
+    throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
+  }
   const message = choice?.message;
   const thinking: AssistantContentBlock[] = [];
   if (config.compat?.thinkingFormat !== "none") {
@@ -235,20 +248,23 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
     }
   }
   const idPrefix = fallbackToolCallPrefix(config.name);
-  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => ({
-    type: "tool_call",
-    id: call.id ?? `${idPrefix}-${index}`,
-    name: call.function?.name ?? "",
-    args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
-  }));
+  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => {
+    const name = call.function?.name ?? "";
+    const args = parseToolArguments(call.function?.arguments);
+    if (!args) throw malformedToolArgumentsError(config.name, name);
+    return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
+  });
 
   const usage = usageFromChunk(payload, config);
-  const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
+  // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
+  const refusal = message?.refusal || "";
+  const finishReason = refusal ? "error" : mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
+  const text = `${message?.content ?? ""}${refusal}`;
 
   return {
     message: buildAssistantMessageFromContent(
       config.model,
-      [...thinking, ...(message?.content ? [{ type: "text" as const, text: message.content }] : []), ...toolCalls],
+      [...thinking, ...(text ? [{ type: "text" as const, text }] : []), ...toolCalls],
       usage,
       finishReason,
       config.name,
@@ -294,10 +310,11 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       thinking: config.compat?.thinkingFormat !== "none",
       usage: true,
       structuredOutput: config.compat?.structuredOutput !== undefined && config.compat.structuredOutput !== false,
+      ...(config.compat?.structuredOutput === "vllm_structured_outputs" ? { strictStructuredOutput: false } : {}),
     },
 
     async complete(request: GenerateRequest): Promise<GenerateResult> {
-      const messages = convertMessages(request.messages, request.systemPrompt, config);
+      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
       const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
       const body: Record<string, unknown> = {
         model: config.model,
@@ -322,13 +339,13 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       const response = await fetchCompleteResponse(`${baseURL}/chat/completions`, {
         method: "POST",
         headers,
-        body: JSON.stringify(withExtraBody(body, request, config)),
+        body: serializeRequest(config.name, withExtraBody(body, request, config)),
         signal: request.signal,
       }, config.name, config.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError(config.name, response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       return parseCompletionResponse(response, config);
@@ -336,7 +353,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
 
     stream(request: GenerateRequest): AsyncIterable<StreamEvent> {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
-      const messages = convertMessages(request.messages, request.systemPrompt, config);
+      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
       const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
 
       const body: Record<string, unknown> = {
@@ -404,6 +421,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
       };
       let deferredThinking = "";
+      let refused = false;
       const flushDeferredThinking = function* (): Generator<RawStreamEvent> {
         if (!deferredThinking) return;
         const delta = deferredThinking;
@@ -441,15 +459,15 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           sawDone = true;
           break;
         }
-        const chunk = safeJsonParse<SSEChunk>(event.data);
-        if (!chunk) continue;
-        if (chunk.error) {
-          const code = chunk.error.code;
-          yield {
-            type: "error",
-            error: `${config.name} stream error: ${chunk.error.message ?? "unknown error"}`,
-            retryable: typeof code === "number" ? isRetryableStatus(code) : true,
-          };
+        if (!event.data.trim()) continue;
+        const chunk = parseJsonRecord<SSEChunk>(event.data);
+        if (!chunk) {
+          yield malformedRecordError(config.name);
+          return;
+        }
+        const envelope = errorEnvelope(`${config.name} stream`, chunk);
+        if (envelope) {
+          yield { type: "error", ...envelope };
           return;
         }
 
@@ -472,6 +490,10 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           (delta.reasoning_details ?? []).forEach(collectReasoningDetail);
         }
         if (delta.content) yield { type: "text", delta: delta.content };
+        if (delta.refusal) {
+          refused = true;
+          yield { type: "text", delta: delta.refusal };
+        }
 
         if (delta.tool_calls) {
           for (const toolCall of delta.tool_calls) {
@@ -481,7 +503,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
             if (!existing) {
               const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               const buffer = {
                 callId,
                 name,
@@ -493,7 +515,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               if (argsDelta) existing.argsBuffer += argsDelta;
               const wasStarted = existing.started;
               yield* startToolCall(existing);
@@ -520,6 +542,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         return;
       }
 
+      if (refused) latestFinishReason = "error";
       if (pendingToolCalls.length > 0) {
         // A provider-side stop or a length cut stays visible even with pending calls.
         if (latestFinishReason !== "error" && latestFinishReason !== "max_tokens") latestFinishReason = "tool_use";

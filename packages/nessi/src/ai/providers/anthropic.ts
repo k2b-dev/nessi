@@ -1,12 +1,12 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, providerError, ProviderError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -44,22 +44,28 @@ type AnthropicResponse = {
     | { type: "thinking"; thinking?: string; signature?: string }
     | { type: "redacted_thinking"; data?: string }
     | { type: "text"; text?: string }
-    | { type: "tool_use"; id?: string; name: string; input?: Record<string, unknown> }
+    | { type: "tool_use"; id?: string; name: string; input?: unknown }
   >;
   stop_reason?: string | null;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-  };
+  usage?: AnthropicUsage;
+};
+
+/** Anthropic counts cached prompt tokens apart from `input_tokens`. */
+type AnthropicUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 };
 
 type AnthropicStreamEvent = {
+  type?: string;
   message?: {
     id?: string;
     model?: string;
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: AnthropicUsage;
   };
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: AnthropicUsage;
   content_block?: {
     type?: string;
     id?: string;
@@ -191,30 +197,24 @@ const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest,
 const resolveTemperature = (request: GenerateRequest, options?: AnthropicOptions) =>
   request.temperature ?? options?.temperature;
 
-const usageFromValue = (
-  usage: { input_tokens?: number; output_tokens?: number } | undefined,
-  options?: AnthropicOptions,
-) =>
-  applyCredits(
-    makeUsage(usage?.input_tokens ?? 0, usage?.output_tokens ?? 0),
-    options?.creditsPerInputToken,
-    options?.creditsPerOutputToken,
-  );
+/** `input` covers the whole prompt, cached parts included; `cacheRead` and `cacheWrite` are parts of it. */
+const usageFromValue = (usage: AnthropicUsage | undefined, options?: AnthropicOptions) => {
+  const cacheRead = usage?.cache_read_input_tokens;
+  const cacheWrite = usage?.cache_creation_input_tokens;
+  const result = makeUsage((usage?.input_tokens ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0), usage?.output_tokens ?? 0);
+  if (cacheRead !== undefined) result.cacheRead = cacheRead;
+  if (cacheWrite !== undefined) result.cacheWrite = cacheWrite;
+  return applyCredits(result, options?.creditsPerInputToken, options?.creditsPerOutputToken);
+};
 
-const mergeUsage = (
-  current: ReturnType<typeof makeUsage>,
-  usage: { input_tokens?: number; output_tokens?: number } | undefined,
-  options?: AnthropicOptions,
-) => {
+/** Stream events report usage in parts; later values replace earlier ones field by field. */
+const mergeRawUsage = (current: AnthropicUsage, usage: AnthropicUsage | undefined): AnthropicUsage => {
   if (!usage) return current;
-  return applyCredits(
-    makeUsage(
-      usage.input_tokens ?? current.input,
-      usage.output_tokens ?? current.output,
-    ),
-    options?.creditsPerInputToken,
-    options?.creditsPerOutputToken,
-  );
+  const next = { ...current };
+  for (const key of ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] as const) {
+    if (typeof usage[key] === "number") next[key] = usage[key];
+  }
+  return next;
 };
 
 const applyResponseFormat = (body: Record<string, unknown>, request: GenerateRequest) => {
@@ -251,7 +251,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
       };
       if (request.tools?.length) body.tools = toAnthropicTools(request.tools);
@@ -267,17 +267,20 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           "x-api-key": options?.apiKey ?? globalThis.process?.env?.ANTHROPIC_API_KEY ?? "",
           "anthropic-version": apiVersion,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("anthropic", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "anthropic", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("anthropic", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<AnthropicResponse>(await response.text());
-      if (!payload) throw new Error("anthropic returned invalid JSON.");
+      const payload = parseJsonRecord<AnthropicResponse>(await response.text());
+      if (!payload) throw invalidResponseError("anthropic");
+      const envelope = errorEnvelope("anthropic", payload, (type) => RETRYABLE_STREAM_ERRORS.has(type));
+      if (envelope) throw providerError(envelope);
+      if (!Array.isArray(payload.content)) throw new ProviderError("anthropic returned no content.", { kind: "provider_error", retryable: true });
       const content: AssistantContentBlock[] = [];
       const idPrefix = fallbackToolCallPrefix("anthropic");
       let toolIndex = 0;
@@ -293,7 +296,9 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         } else if (block.type === "text") {
           appendAssistantContentBlock(content, { type: "text", text: block.text ?? "" });
         } else if (block.type === "tool_use") {
-          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args: block.input ?? {} });
+          const args = parseToolArguments(block.input);
+          if (!args) throw malformedToolArgumentsError("anthropic", block.name);
+          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args });
           toolIndex++;
         }
       }
@@ -313,7 +318,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
         stream: true,
       };
@@ -343,7 +348,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       }
 
       const toolBuffers = new Map<number, { callId: string; name: string; argsBuffer: string }>();
-      let latestUsage = makeUsage();
+      let rawUsage: AnthropicUsage = {};
       let latestFinishReason: GenerateResult["finishReason"] | undefined;
       let syntheticIndex = 0;
       let sawToolCall = false;
@@ -353,10 +358,15 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
 
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
-        const payload = safeJsonParse<AnthropicStreamEvent>(event.data);
-        if (!payload) continue;
+        if (!event.data.trim()) continue;
+        const payload = parseJsonRecord<AnthropicStreamEvent>(event.data);
+        if (!payload) {
+          yield malformedRecordError("anthropic");
+          return;
+        }
 
-        if (event.event === "error") {
+        // Proxies may drop the SSE event name and keep only `{ type: "error" }`.
+        if (event.event === "error" || payload.type === "error") {
           const type = payload.error?.type ?? "unknown_error";
           yield {
             type: "error",
@@ -368,7 +378,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "message_stop") sawMessageStop = true;
 
         if (event.event === "message_start" && payload.message?.usage) {
-          latestUsage = mergeUsage(latestUsage, payload.message.usage, options);
+          rawUsage = mergeRawUsage(rawUsage, payload.message.usage);
         }
 
         if (event.event === "content_block_start" && payload.content_block?.type === "redacted_thinking") {
@@ -378,7 +388,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "content_block_start" && payload.content_block?.type === "tool_use") {
           const index = typeof payload.index === "number" ? payload.index : syntheticIndex++;
           const startInput = payload.content_block.input;
-          const argsBuffer = startInput && Object.keys(startInput).length > 0 ? JSON.stringify(startInput) : "";
+          const argsBuffer = toolArgumentsText(startInput);
           toolBuffers.set(index, {
             callId: payload.content_block.id ?? `${idPrefix}-${index}`,
             name: payload.content_block.name ?? "",
@@ -441,7 +451,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         }
 
         if (event.event === "message_delta" && payload.usage) {
-          latestUsage = mergeUsage(latestUsage, payload.usage, options);
+          rawUsage = mergeRawUsage(rawUsage, payload.usage);
         }
         if (event.event === "message_delta" && payload.delta?.stop_reason) {
           latestFinishReason = mapFinishReason(payload.delta.stop_reason, sawToolCall || toolBuffers.size > 0);
@@ -453,6 +463,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         return;
       }
 
+      const latestUsage = usageFromValue(rawUsage, options);
       if (latestUsage.total > 0 || latestFinishReason) {
         yield { type: "usage", usage: latestUsage, finishReason: latestFinishReason };
       }
