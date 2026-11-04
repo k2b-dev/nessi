@@ -4,7 +4,7 @@ import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toOllamaTools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
@@ -35,7 +35,8 @@ type OllamaResponse = {
     role?: string;
     content?: string;
     thinking?: string;
-    tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
+    /** Usually an object; validated before a call becomes executable. */
+    tool_calls?: Array<{ function: { name: string; arguments?: unknown } }>;
   };
   done: boolean;
   done_reason?: string;
@@ -107,12 +108,12 @@ const usageFromResponse = (response: OllamaResponse, options?: OllamaOptions) =>
   );
 
 const toolCallsFromResponse = (response: OllamaResponse, idPrefix = fallbackToolCallPrefix("ollama")): ToolCallBlock[] =>
-  (response.message?.tool_calls ?? []).map((toolCall, index) => ({
-    type: "tool_call",
-    id: `${idPrefix}-${index}`,
-    name: toolCall.function.name,
-    args: toolCall.function.arguments,
-  }));
+  (response.message?.tool_calls ?? []).map((toolCall, index) => {
+    const { name } = toolCall.function;
+    const args = parseToolArguments(toolCall.function.arguments);
+    if (!args) throw malformedToolArgumentsError("ollama", name);
+    return { type: "tool_call", id: `${idPrefix}-${index}`, name, args };
+  });
 
 const generationOptions = (request: GenerateRequest, options?: OllamaOptions) => {
   const result: Record<string, unknown> = {};
@@ -302,13 +303,21 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           if (chunk.message?.content) yield { type: "text", delta: chunk.message.content };
           for (const toolCall of chunk.message?.tool_calls ?? []) {
             const callId = `${idPrefix}-${toolCounter++}`;
-            yield { type: "tool_start", callId, name: toolCall.function.name };
-            yield {
-              type: "tool_call",
-              callId,
-              name: toolCall.function.name,
-              args: ensureRecord(toolCall.function.arguments),
-            };
+            const { name } = toolCall.function;
+            yield { type: "tool_start", callId, name };
+            const args = parseToolArguments(toolCall.function.arguments);
+            if (!args) {
+              yield {
+                type: "tool_error",
+                callId,
+                name,
+                reason: "invalid_tool_arguments",
+                message: `Received malformed JSON arguments for "${name}".`,
+                argsText: stringifyJson(toolCall.function.arguments),
+              };
+              continue;
+            }
+            yield { type: "tool_call", callId, name, args };
           }
           if (chunk.done) {
             sawDone = true;
