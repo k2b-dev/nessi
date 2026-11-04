@@ -20,18 +20,25 @@ export const FILE_PART_TOKEN_ESTIMATE = 1_600;
 
 /**
  * Rough token estimate: ~4 characters per token for text and JSON, a fixed allowance per file
- * part. Base64 file bodies are not counted as text. Slightly overestimates text due to JSON syntax.
+ * part of a user message. Those base64 bodies are not counted as text; anything else, tool
+ * results included, is. `extra` (system prompt, tool specs) counts as text. Slightly
+ * overestimates text due to JSON syntax.
  */
-export const estimateContextTokens = (value: unknown): number => {
+export const estimateContextTokens = (messages: Message[], extra?: Record<string, unknown>): number => {
   let files = 0;
-  const text = JSON.stringify(value, (_key, child: unknown) => {
-    if (child && typeof child === "object" && "type" in child && child.type === "file" && "data" in child) {
-      files++;
-      return { ...child, data: "" };
-    }
-    return child;
+  const withoutFileBodies = messages.map((message) => {
+    if (message.role !== "user" || !message.content.some((part) => typeof part !== "string" && part.type === "file")) return message;
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (typeof part === "string" || part.type !== "file") return part;
+        files++;
+        return { ...part, data: "" };
+      }),
+    };
   });
-  return Math.ceil((text?.length ?? 0) / 4) + files * FILE_PART_TOKEN_ESTIMATE;
+  const text = JSON.stringify(extra === undefined ? withoutFileBodies : { ...extra, messages: withoutFileBodies });
+  return Math.ceil(text.length / 4) + files * FILE_PART_TOKEN_ESTIMATE;
 };
 
 /** Rough token estimate of messages; see `estimateContextTokens()`. */

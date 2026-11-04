@@ -17,6 +17,20 @@ describe("context estimate for files", () => {
     expect(image.data).toHaveLength(1024 * 1024);
   });
 
+  it("adds one allowance per file and keeps text estimates unchanged", () => {
+    const text: Message[] = [{ role: "user", content: [{ type: "text", text: "x".repeat(4_000) }] }];
+    expect(estimateTokens(text)).toBe(Math.ceil(JSON.stringify(text).length / 4));
+    const twoImages: Message[] = [{ role: "user", content: [image, { ...image, data: "B".repeat(10) }] }];
+    const emptyImages: Message[] = [{ role: "user", content: [{ ...image, data: "" }, { ...image, data: "" }] }];
+    expect(estimateTokens(twoImages)).toBe(estimateTokens(emptyImages));
+    expect(estimateTokens(twoImages)).toBeGreaterThanOrEqual(2 * FILE_PART_TOKEN_ESTIMATE);
+  });
+
+  it("counts file-shaped tool results as the text the provider receives", () => {
+    const toolResult: Message[] = [{ role: "tool_result", callId: "c1", name: "fetch", result: { type: "file", data: "A".repeat(400_000) } }];
+    expect(estimateTokens(toolResult)).toBeGreaterThan(100_000);
+  });
+
   it("does not force compaction for one large image in a 128k context", async () => {
     let compactContext: { force: boolean; fillRatio?: number } | undefined;
     const provider = mockProvider(

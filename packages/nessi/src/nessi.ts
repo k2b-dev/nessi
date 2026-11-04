@@ -1282,7 +1282,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         const contextWindow = provider.contextWindow;
         const computeFillRatio = (providerMessages: Message[]) => {
           if (typeof contextWindow !== "number" || contextWindow <= 0) return undefined;
-          const estimatedTokens = estimateContextTokens({ systemPrompt, messages: providerMessages, tools: providerTools });
+          const estimatedTokens = estimateContextTokens(providerMessages, { systemPrompt, tools: providerTools });
           const tokens = lastUsage.input > 0 ? Math.max(lastUsage.input, estimatedTokens) : estimatedTokens;
           return tokens / contextWindow;
         };
