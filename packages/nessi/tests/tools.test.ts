@@ -1,6 +1,9 @@
 import { describe, it, expect } from "bun:test";
 import { z } from "zod";
+import { nessi } from "../src/nessi.js";
+import { memoryStore } from "../src/stores.js";
 import { defineTool, toolToJsonSchema, toolToSpec } from "../src/tools.js";
+import { mockProviderMultiTurn } from "./mock-provider.js";
 
 describe("defineTool", () => {
   const echoTool = defineTool({
@@ -106,15 +109,29 @@ describe("client tool approval", () => {
 });
 
 describe("tool JSON schemas", () => {
-  it("convert each Zod schema once and share the frozen result", () => {
+  it("convert each Zod schema once per loop and share the frozen result", async () => {
     const inputSchema = z.object({ query: z.string(), filters: z.object({ tags: z.array(z.string()) }) });
-    // A resolver builds new tool objects every turn around the same schema.
-    const build = () => defineTool({ name: "search", description: "Search", inputSchema }).server(async () => "ok");
-    const first = toolToSpec(build()).inputSchema;
-    expect(toolToSpec(build()).inputSchema).toBe(first);
-    expect(Object.isFrozen(first)).toBe(true);
-    expect(Object.isFrozen(first.properties?.filters)).toBe(true);
-    const other = defineTool({ name: "search", description: "Search", inputSchema: z.object({ query: z.string() }) }).server(async () => "ok");
-    expect(toolToSpec(other).inputSchema).not.toBe(first);
+    const sent: unknown[] = [];
+    const provider = mockProviderMultiTurn((request, index) => {
+      sent.push(request.tools?.[0]?.inputSchema);
+      return index === 0
+        ? [{ type: "tool_call", callId: "c1", name: "search", args: { query: "x", filters: { tags: [] } } }, { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "tool_use" }]
+        : [{ type: "text", delta: "Done." }, { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "stop" }];
+    });
+    // The resolver builds new tool objects every turn around the same schema.
+    const tools = async () => [defineTool({ name: "search", description: "Search", inputSchema }).server(async () => "ok")];
+    for await (const _event of nessi({ provider, store: memoryStore(), systemPrompt: "test", input: "Search", tools })) { /* drain */ }
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toBe(sent[0]);
+    expect(Object.isFrozen(sent[0])).toBe(true);
+    expect(() => { (sent[0] as { type?: string }).type = "array"; }).toThrow(TypeError);
+  });
+
+  it("keep public conversions fresh and mutable", () => {
+    const tool = defineTool({ name: "search", description: "Search", inputSchema: z.object({ query: z.string() }) }).server(async () => "ok");
+    const first = toolToSpec(tool).inputSchema;
+    expect(toolToSpec(tool).inputSchema).not.toBe(first);
+    expect(Object.isFrozen(first)).toBe(false);
   });
 });

@@ -29,7 +29,7 @@ import type {
 } from "./types.js";
 import { aggregateFromTurns, buildLoopTiming, cloneUsage } from "./aggregates.js";
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./ai/shared/messages.js";
-import { toolToSpec } from "./tools.js";
+import { cachedToolSpec, toolToSpec } from "./tools.js";
 import {
   closeUnansweredToolCalls,
   createLoopId,
@@ -50,7 +50,7 @@ type Channel<T> = {
 }
 
 type ToolSnapshot = {
-  providerTools: ReturnType<typeof toolToSpec>[];
+  providerTools: ReturnType<typeof cachedToolSpec>[];
   toolMap: ReadonlyMap<string, Tool>;
 }
 
@@ -69,7 +69,7 @@ const createToolSnapshot = (value: unknown): ToolSnapshot => {
   }
 
   return {
-    providerTools: tools.map(toolToSpec),
+    providerTools: tools.map(cachedToolSpec),
     toolMap: new Map(tools.map((tool) => [tool.def.name, tool])),
   };
 }

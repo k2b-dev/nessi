@@ -51,26 +51,28 @@ const deepFreeze = <T>(value: T): T => {
   return value;
 };
 
-// Zod schemas are immutable, so a schema's JSON form can be reused; a tool resolver that returns
-// the same tools every turn then converts each schema once.
 const toJsonSchema = (schema: z.ZodType) => z.toJSONSchema(schema, { target: "draft-07" });
-const jsonSchemas = new WeakMap<z.ZodType, ReturnType<typeof toJsonSchema>>();
-
-/** The schema's JSON form, shared between calls and therefore frozen. */
-const inputJsonSchema = (schema: z.ZodType) => {
-  let json = jsonSchemas.get(schema);
-  if (!json) {
-    json = deepFreeze(toJsonSchema(schema));
-    jsonSchemas.set(schema, json);
-  }
-  return json;
-};
 
 export const toolToJsonSchema = (tool: ServerTool | ClientTool) => ({
   name: tool.def.name,
   description: tool.def.description,
-  parameters: inputJsonSchema(tool.def.inputSchema),
+  parameters: toJsonSchema(tool.def.inputSchema),
 })
+
+// Zod schemas are immutable, so the loop converts each one once, also when a tool resolver builds
+// new tools around the same schemas every turn. Metadata registered on a schema after its first
+// turn is not picked up.
+const loopJsonSchemas = new WeakMap<z.ZodType, ReturnType<typeof toJsonSchema>>();
+
+/** The provider spec the loop sends; its schema is shared between turns and therefore frozen. */
+export const cachedToolSpec = (tool: ServerTool | ClientTool) => {
+  let inputSchema = loopJsonSchemas.get(tool.def.inputSchema);
+  if (!inputSchema) {
+    inputSchema = deepFreeze(toJsonSchema(tool.def.inputSchema));
+    loopJsonSchemas.set(tool.def.inputSchema, inputSchema);
+  }
+  return { name: tool.def.name, description: tool.def.description, inputSchema };
+};
 
 export const toolToSpec = (tool: ServerTool | ClientTool) => {
   const schema = toolToJsonSchema(tool);
