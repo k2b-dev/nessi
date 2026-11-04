@@ -239,6 +239,14 @@ instructions and one repair attempt. `input` can be a string, content parts, or
 a full user message, including image file parts when the provider supports
 images.
 
+Failures throw `StructuredOutputError` with a `code`: `invalid_output`,
+`truncated` (the response hit the output token limit), `provider_stopped` (the
+provider ended it with an error, a refusal, or an interruption), `aborted`,
+`loop_failed`, `max_turns`, or `unsupported_tool`. In both modes, output from a
+response that did not end normally is never accepted, and direct mode never
+repairs it. Provider and output failures carry `details.aggregate` with the
+usage and timing of the responses that completed.
+
 `nessi.structured()` can use server tools for bounded task work. It adds an
 internal `submit_result` tool and returns after that tool receives a valid
 schema value. Client tools, approval tools, and interactive tool bridges remain
