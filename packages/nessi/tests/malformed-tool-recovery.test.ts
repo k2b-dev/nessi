@@ -263,8 +263,14 @@ describe("malformed tool recovery", () => {
     await store.append({ role: "assistant", content: [{ type: "tool_call", id: "cut", name: "echo", args: {} }], stopReason: "max_tokens" });
     const requests: ProviderRequest[] = [];
     const provider = mockProviderMultiTurn((request) => { requests.push(request); return answer; });
-    await collect(nessi({ provider, store, systemPrompt: "test", tools: [echo] }));
+    const events = await collect(nessi({ provider, store, systemPrompt: "test", tools: [echo] }));
     expect(executed).toBe(0);
     expect(requests[0]?.messages.at(-1)).toMatchObject({ role: "tool_result", callId: "cut", reason: "not_run" });
+    // The result is stored too, and the aggregate rebuilt from history shows it.
+    expect((await store.load()).filter(({ message }) => message.role === "tool_result")).toEqual([
+      expect.objectContaining({ message: expect.objectContaining({ callId: "cut", reason: "not_run" }) }),
+    ]);
+    const end = events.find((event) => event.type === "loop_end");
+    expect(end?.type === "loop_end" ? end.aggregate.turns[0]?.toolCalls[0] : undefined).toMatchObject({ callId: "cut", isError: true });
   });
 });

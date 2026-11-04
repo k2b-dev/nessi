@@ -250,6 +250,29 @@ describe("nessi resume of unresolved tool calls", () => {
     expect(results).toHaveLength(3);
   });
 
+  it("stores the calls after a terminal tool as not run, so a resume does not run them", async () => {
+    const ran: string[] = [];
+    // `terminal` is not part of defineTool()'s options; nessi reads it from the definition.
+    const finish = Object.assign(defineTool({ name: "finish", description: "Finish", inputSchema: z.object({}) }), { terminal: true })
+      .server(async () => { ran.push("finish"); return "done"; });
+    const write = defineTool({ name: "write", description: "Write", inputSchema: z.object({ text: z.string() }) })
+      .server(async ({ text }) => { ran.push(text); return "ok"; });
+    const provider = mockProviderMultiTurn((_request, index) => index === 0
+      ? [
+        { type: "tool_call", callId: "f", name: "finish", args: {} },
+        { type: "tool_call", callId: "a", name: "write", args: { text: "a" } },
+        { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "tool_use" },
+      ]
+      : [{ type: "text", delta: "Done." }, { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "stop" }]);
+    const store = memoryStore();
+    await collectEvents(nessi({ provider, store, systemPrompt: "sys", input: "go", tools: [finish, write] }));
+    await collectEvents(nessi({ provider, store, systemPrompt: "sys", tools: [finish, write] }));
+
+    expect(ran).toEqual(["finish"]);
+    const results = (await store.load()).flatMap(({ message }) => (message.role === "tool_result" ? [message] : []));
+    expect(results.map((result) => [result.callId, result.reason])).toEqual([["f", undefined], ["a", "not_run"]]);
+  });
+
   it("emits a fresh tool_action_request when the resume has no seeded response", async () => {
     const store = await storeWithHistory(historyWithPendingCall());
     const provider = mockProvider([

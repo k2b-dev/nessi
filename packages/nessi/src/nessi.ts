@@ -253,6 +253,9 @@ const malformedRecoveryExhausted = (): NessiIssue => ({
   retryable: false,
 });
 
+/** What the model reads for a call after a terminal tool of the same response. */
+const AFTER_TERMINAL_TOOL_RESULT = "Not run: an earlier call of this response ended the turn.";
+
 /** What the model reads for a call of a response cut off at the output token limit. */
 const CUT_OFF_TOOL_RESULT =
   "Not run: the response reached the output token limit, so its calls did not run. Send them again in a shorter response, for example with smaller arguments or fewer calls at once.";
@@ -1209,10 +1212,10 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     const entry = entries[lastAssistantIdx]!;
     if (entry.kind === "summary") return;
     const assistantMessage = entry.message as AssistantMessage;
-    // Calls from a response the provider stopped or cut off, or that the user aborted while it was
-    // still being generated, are never executed. They reach the provider as not run instead.
+    // Calls from a response the provider stopped, or that the user aborted while it was still
+    // being generated, are never executed. They reach the provider as not run instead.
     const stopped = assistantMessage.stopReason;
-    if (stopped === "error" || stopped === "interrupted" || stopped === "aborted" || stopped === "max_tokens") return;
+    if (stopped === "error" || stopped === "interrupted" || stopped === "aborted") return;
     const toolCallBlocks = assistantMessage.content.filter((block): block is ToolCallBlock => block.type === "tool_call");
     if (toolCallBlocks.length === 0) return;
 
@@ -1230,6 +1233,17 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
     const pending = toolCallBlocks.filter((block) => !resolvedCallIds.has(block.id) && !isMalformedCallId(block.id));
     if (pending.length === 0) return;
+
+    // A cut-off response stored without the error results of its calls gets them now; they never run.
+    if (stopped === "max_tokens") {
+      const aggregateCalls = loopTurns.findLast((turn) => turn.message === assistantMessage)?.toolCalls ?? [];
+      for (const call of pending) {
+        await appendErrorResult(call.id, call.name, CUT_OFF_TOOL_RESULT, "not_run");
+        const aggregateCall = aggregateCalls.find((toolCall) => toolCall.callId === call.id);
+        if (aggregateCall) Object.assign(aggregateCall, { result: CUT_OFF_TOOL_RESULT, isError: true });
+      }
+      return;
+    }
 
     const toolSnapshot = await resolveToolSnapshot();
 
@@ -1680,19 +1694,22 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           if (aggregateToolCall) Object.assign(aggregateToolCall, patch);
         };
 
-        if (cutOff) {
-          for (const tc of toolCalls) {
-            const issue = toolExecutionIssue("not_run", CUT_OFF_TOOL_RESULT, tc);
-            await appendErrorResult(tc.id, tc.name, issue.message, "not_run");
-            updateAggregateToolCall(tc.id, { result: issue.message, isError: true });
+        /** Answers calls that will not run, without execution events. */
+        async function* skipToolCalls(calls: ToolCallBlock[], text: string): AsyncGenerator<OutboundEvent> {
+          for (const tc of calls) {
+            const issue = toolExecutionIssue("not_run", text, tc);
+            await appendErrorResult(tc.id, tc.name, text, "not_run");
+            updateAggregateToolCall(tc.id, { result: text, isError: true });
             recordIssue(issue, turnIssues);
             yield issueEvent(issue, turnCtx);
           }
         }
 
+        if (cutOff) yield* skipToolCalls(toolCalls, CUT_OFF_TOOL_RESULT);
+
         let terminalToolCompleted = false;
         try {
-          for (const tc of cutOff ? [] : toolCalls) {
+          for (const [index, tc] of (cutOff ? [] : toolCalls).entries()) {
             yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
             const aggregateToolCall = aggregateToolCallMap.get(tc.id);
             const isTerminalTool = Boolean(
@@ -1700,6 +1717,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             );
             if (isTerminalTool && aggregateToolCall && !aggregateToolCall.isError) {
               terminalToolCompleted = true;
+              // The calls after a terminal tool never run; their results keep a resume from running them.
+              yield* skipToolCalls(toolCalls.slice(index + 1), AFTER_TERMINAL_TOOL_RESULT);
               break;
             }
           }
