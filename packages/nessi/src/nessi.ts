@@ -24,6 +24,7 @@ import type {
   ToolContext,
   ToolExecutionIssue,
   ToolResultMessage,
+  ToolResultReason,
   Usage,
   UserMessage,
 } from "./types.js";
@@ -35,6 +36,10 @@ import {
   closeUnansweredToolCalls,
   createLoopId,
   estimateContextTokens,
+  isMalformedCallId,
+  malformedCallName,
+  malformedCallResult,
+  newMalformedCallId,
   projectHistoricalToolResults,
   rejectRemovedOptions,
   toErrorMessage,
@@ -238,6 +243,34 @@ const runtimeIssue = (error: unknown): NessiIssue => ({
 
 const issueToToolResult = (issue: NessiIssue) => issue.message;
 
+/** Turns in a row that may retry malformed calls before the loop stops. */
+const MALFORMED_RECOVERY_ATTEMPTS = 2;
+
+const malformedRecoveryExhausted = (): NessiIssue => ({
+  kind: "runtime_error",
+  message: "Tool calls are still malformed after two recovery attempts. Stopping the loop.",
+  retryable: false,
+});
+
+const resultReason = (issue: NessiIssue): ToolResultReason | undefined =>
+  issue.kind === "tool_execution_error" ? issue.reason : issue.kind === "timeout" ? "timeout" : undefined;
+
+/**
+ * Trailing assistant messages that carried malformed calls, counted back to the first one without
+ * any or to a user message; a resumed loop goes on with the recovery budget its history spent.
+ */
+const trailingMalformedTurns = (entries: StoreEntry[]): number => {
+  let count = 0;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const message = entries[index]!.message;
+    if (message.role === "user") break;
+    if (message.role !== "assistant") continue;
+    if (!message.content.some((block) => block.type === "tool_call" && isMalformedCallId(block.id))) break;
+    count++;
+  }
+  return count;
+};
+
 const timeoutMsFor = (tool: Tool) => {
   const timeoutMs = tool.def.timeoutMs;
   return typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : undefined;
@@ -356,8 +389,9 @@ const aggregateTurnsFromEntries = (entries: StoreEntry[]): LoopTurnAggregate[] =
     const message = messages[i];
     if (message?.role !== "assistant") continue;
 
+    // Malformed calls stored for the model were never executable, as in the live aggregate.
     const toolCalls = message.content
-      .filter((block): block is ToolCallBlock => block.type === "tool_call")
+      .filter((block): block is ToolCallBlock => block.type === "tool_call" && !isMalformedCallId(block.id))
       .map((block): LoopToolCallAggregate => ({
         callId: block.id,
         name: block.name,
@@ -669,10 +703,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     return applied;
   }
 
-  const appendToolResult = async (callId: string, name: string, result: unknown, isError = false) => {
-    const msg: ToolResultMessage = { role: "tool_result", callId, name, result, isError };
-    await store.append(msg);
-    return msg;
+  const appendErrorResult = async (callId: string, name: string, result: unknown, reason: ToolResultReason | undefined) => {
+    await store.append({ role: "tool_result", callId, name, result, isError: true, ...(reason ? { reason } : {}) });
   };
 
   const deadlineError = () => new Error(signal.aborted ? "the loop was aborted" : "the tool deadline passed");
@@ -742,7 +774,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     finishExecution?: () => void,
   ): AsyncGenerator<OutboundEvent> {
     const result = issueToToolResult(issue);
-    await appendToolResult(tc.id, tc.name, result, true);
+    await appendErrorResult(tc.id, tc.name, result, resultReason(issue));
     updateAggregateToolCall(tc.id, { result, isError: true });
     recordIssue(issue, turnIssues);
     yield issueEvent(issue, turnCtx);
@@ -1145,8 +1177,12 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   }
 
+  /** Malformed-call recoveries the stored history already spent; set by a resumed loop. */
+  let resumedMalformedTurns = 0;
+
   async function* resumePendingToolCalls(turnCtx: TurnContext): AsyncGenerator<OutboundEvent> {
     const entries = await store.load();
+    resumedMalformedTurns = trailingMalformedTurns(entries);
 
     let lastAssistantIdx = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -1178,7 +1214,13 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       if (message.role === "tool_result") resolvedCallIds.add(message.callId);
     }
 
-    const pending = toolCallBlocks.filter((block) => !resolvedCallIds.has(block.id));
+    // A malformed call stored without its error result (the run stopped in between) gets it now.
+    for (const call of toolCallBlocks) {
+      if (isMalformedCallId(call.id) && !resolvedCallIds.has(call.id)) {
+        await appendErrorResult(call.id, call.name, malformedCallResult(), "malformed_tool_call");
+      }
+    }
+    const pending = toolCallBlocks.filter((block) => !resolvedCallIds.has(block.id) && !isMalformedCallId(block.id));
     if (pending.length === 0) return;
 
     const toolSnapshot = await resolveToolSnapshot();
@@ -1251,6 +1293,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           yield event;
         }
         if (emittedResumeTurn) eventTurnIndex++;
+        consecutiveMalformedTurns = resumedMalformedTurns;
         if (signal.aborted) {
           yield loopEndEvent("aborted");
           return;
@@ -1268,6 +1311,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           providerTurn = 0;
           compactionRetried = false;
           consecutiveMalformedTurns = 0;
+        }
+
+        // A resumed history that already spent its recovery budget gets no further request.
+        if (consecutiveMalformedTurns > MALFORMED_RECOVERY_ATTEMPTS) {
+          const issue = malformedRecoveryExhausted();
+          recordIssue(issue);
+          yield issueEvent(issue);
+          yield loopEndEvent("error");
+          return;
         }
 
         if (providerTurn >= maxTurns) {
@@ -1525,9 +1577,16 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return;
         }
 
+        // Each malformed call is stored as a call that nessi answers with an error, so the model
+        // reads what went wrong next to its own response and the call is never executed.
+        const malformedIssues = turnIssues.toolIssues.filter((issue) => issue.kind === "malformed_tool_call");
+        const malformedCalls = malformedIssues.map((issue) => ({
+          call: { type: "tool_call" as const, id: newMalformedCallId(), name: malformedCallName(issue.name), args: {} },
+          result: malformedCallResult(issue.message),
+        }));
         const assistantMessage = buildAssistantMessageFromContent(
           provider.model,
-          assistantBlocks,
+          [...assistantBlocks, ...malformedCalls.map(({ call }) => call)],
           turnUsage,
           stopReason,
           provider.name,
@@ -1556,6 +1615,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           storeError = error;
         }
         if (storeFailed) throw storeError;
+        for (const { call, result } of malformedCalls) await appendErrorResult(call.id, call.name, result, "malformed_tool_call");
 
         // The provider stopped the answer itself (content filter, safety, malformed call): its
         // tool calls are not executed and the loop ends with an error.
@@ -1574,7 +1634,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return;
         }
 
-        const malformedIssues = turnIssues.toolIssues.filter((issue) => issue.kind === "malformed_tool_call");
         consecutiveMalformedTurns = malformedIssues.length > 0 ? consecutiveMalformedTurns + 1 : 0;
 
         if (toolCalls.length === 0 && malformedIssues.length === 0) {
@@ -1624,29 +1683,11 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
         let malformedRetriesExhausted = false;
         if (malformedIssues.length > 0 && !terminalToolCompleted) {
-          if (consecutiveMalformedTurns > 2) {
-            const issue: NessiIssue = {
-              kind: "runtime_error",
-              message: "Tool calls are still malformed after two recovery attempts. Stopping the loop.",
-              retryable: false,
-            };
+          if (consecutiveMalformedTurns > MALFORMED_RECOVERY_ATTEMPTS) {
+            const issue = malformedRecoveryExhausted();
             recordIssue(issue, turnIssues);
             yield issueEvent(issue, turnCtx);
             malformedRetriesExhausted = true;
-          } else {
-            // No executable call exists to pair with a tool result. A user message keeps the
-            // provider transcript valid, including calls with no usable name or id.
-            await store.append({
-              role: "user",
-              content: [{
-                type: "text",
-                text: [
-                  "Nessi could not execute these malformed tool calls:",
-                  ...malformedIssues.map((issue) => issue.message),
-                  "Retry with a valid tool name and a complete JSON object. The arguments may have been truncated; use smaller arguments, for example one file per call. Do not repeat calls that already succeeded.",
-                ].join("\n"),
-              }],
-            });
           }
         }
 

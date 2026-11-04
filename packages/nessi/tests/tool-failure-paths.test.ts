@@ -27,7 +27,7 @@ const expectTimedOutCall = async (tool: Tool) => {
   const end = events[endIndex];
   expect(end).toMatchObject({ isError: true, result: 'Tool "work" timed out after 20ms.' });
   const stored = (await store.load()).find(({ message }) => message.role === "tool_result")?.message;
-  expect(stored).toMatchObject({ isError: true, result: 'Tool "work" timed out after 20ms.' });
+  expect(stored).toMatchObject({ isError: true, result: 'Tool "work" timed out after 20ms.', reason: "timeout" });
   const loopEnd = events.at(-1);
   expect(loopEnd?.type === "loop_end" ? loopEnd.aggregate.turns[0]?.toolCalls[0] : undefined)
     .toMatchObject({ isError: true, result: 'Tool "work" timed out after 20ms.' });
@@ -55,5 +55,20 @@ describe("tool failure paths", () => {
       .server(async (_input, ctx) => ctx.requestClientTool("pick", {}));
     const events = await expectTimedOutCall(tool);
     expect(events.some((event) => event.type === "tool_action_request" && event.kind === "client_tool")).toBe(true);
+  });
+
+  it("marks each error result nessi writes with a fixed reason", async () => {
+    const cases: Array<{ tool?: Tool; reason: string }> = [
+      { reason: "unknown_tool" },
+      { tool: defineTool({ name: "work", description: "Work", inputSchema: z.object({ path: z.string() }) }).server(async () => "ok"), reason: "input_validation_failed" },
+      { tool: defineTool({ name: "work", description: "Work", inputSchema: z.object({}) }).server(async () => { throw new Error("disk full"); }), reason: "execution_failed" },
+      { tool: defineTool({ name: "work", description: "Work", inputSchema: z.object({}), outputSchema: z.string() }).server(async () => 1 as unknown as string), reason: "output_validation_failed" },
+    ];
+    for (const { tool, reason } of cases) {
+      const store = memoryStore();
+      for await (const _ of nessi({ provider: provider(), store, systemPrompt: "s", input: "go", tools: tool ? [tool] : [], maxTurns: 2 }));
+      const stored = (await store.load()).find(({ message }) => message.role === "tool_result")?.message;
+      expect(stored).toMatchObject({ isError: true, reason });
+    }
   });
 });

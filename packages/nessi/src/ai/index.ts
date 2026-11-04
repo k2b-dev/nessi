@@ -71,6 +71,7 @@ export type {
   ToolExecutionIssue,
   ToolHistoricalResultIssue,
   ToolResultMessage,
+  ToolResultReason,
   ToolStreamIssue,
   ToolStreamIssueKind,
   ToolStreamIssueReason,

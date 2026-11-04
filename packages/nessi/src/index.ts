@@ -47,6 +47,7 @@ export type {
   AssistantStopReason,
   HistoricalToolResult,
   ToolResultMessage,
+  ToolResultReason,
   AssistantContentBlock,
   TextBlock,
   ThinkingBlock,
