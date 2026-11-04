@@ -1,19 +1,14 @@
 <p align="center">
-  <img src="./packages/nessi-ui/public/logo.svg" alt="nessi" width="96" />
+  <img src="./assets/logo.svg" alt="nessi" width="96" />
 </p>
 
 # nessi
 
-Minimal agent stack for provider adapters, an event-driven loop, and a browser UI.
+Minimal agent stack: provider adapters and an event-driven loop, published as
+`@k2b/nessi`.
 
-The monorepo is intentionally split into two focused packages:
-
-- `@k2b/nessi` for the published agent loop and provider API
-- `nessi-ui` for the browser client
-
-`@k2b/nessi` replaces the deprecated `@valentinkolb/nessi` package. The public
-API and subpaths are unchanged; migrate dependencies and imports by replacing
-the scope. Future UI container releases use `ghcr.io/k2b-dev/nessi-ui`.
+`@k2b/nessi` replaces the deprecated `@valentinkolb/nessi` package; migrate
+dependencies and imports by replacing the scope.
 
 ## Packages
 
@@ -54,15 +49,6 @@ for await (const event of loop) {
 }
 ```
 
-### `nessi-ui`
-
-Browser-first reference client built on `@k2b/nessi`.
-
-```bash
-bun install
-bun --filter nessi-ui dev
-```
-
 ## Development
 
 Install dependencies once:
@@ -76,8 +62,7 @@ Useful commands from the repository root:
 ```bash
 bun run typecheck
 bun run test
-bun run dev
-bun run build
+bun run build:nessi
 ```
 
 ## Repository Layout
@@ -85,7 +70,6 @@ bun run build
 ```txt
 packages/
   nessi/       Published package: agent loop plus /ai provider API
-  nessi-ui/    Browser UI, settings, local persistence, Docker setup
 ```
 
 ## Skill
@@ -98,6 +82,5 @@ bunx skills add https://github.com/k2b-dev/nessi
 
 ## Notes
 
-- `@k2b/nessi` is the reusable library package.
-- `nessi-ui` is the reference application.
-- The UI Docker build lives at [`packages/nessi-ui/Dockerfile`](./packages/nessi-ui/Dockerfile).
+The browser reference client `nessi-ui` was removed after `@k2b/nessi` 0.19.0;
+the tag `nessi-v0.19.0` keeps its last state.

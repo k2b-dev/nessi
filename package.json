@@ -1,6 +1,6 @@
 {
   "name": "nessi-monorepo",
-  "description": "Minimal agent loop, provider adapters, and browser UI for nessi.",
+  "description": "Minimal agent loop and provider adapters for nessi.",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -10,15 +10,10 @@
     "typescript": "^5.7.0"
   },
   "scripts": {
-    "dev": "bun run --filter nessi-ui dev",
-    "build": "bun run --filter nessi-ui build",
-    "typecheck": "bun run --filter @k2b/nessi typecheck && bun run --filter nessi-ui typecheck",
+    "typecheck": "bun run --filter @k2b/nessi typecheck",
     "test": "bun run --filter @k2b/nessi test",
     "test:ai": "bun run --filter @k2b/nessi test:ai",
     "test:core": "bun run --filter @k2b/nessi test:core",
-    "build:nessi": "bun run --filter @k2b/nessi build:npm",
-    "dev:ui": "bun run --filter nessi-ui dev",
-    "build:ui": "bun run --filter nessi-ui build",
-    "preview:ui": "bun run --filter nessi-ui preview"
+    "build:nessi": "bun run --filter @k2b/nessi build:npm"
   }
 }
