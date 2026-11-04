@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { invalidResponseError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -267,7 +267,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           "x-api-key": options?.apiKey ?? globalThis.process?.env?.ANTHROPIC_API_KEY ?? "",
           "anthropic-version": apiVersion,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("anthropic", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "anthropic", options?.timeouts);
 

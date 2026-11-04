@@ -316,7 +316,8 @@ cancellation preserves the signal's original reason.
 
 `complete()` and `completeFromStream()` throw a `ProviderError` (from
 `@k2b/nessi/ai`) when a provider request fails. It carries `kind`
-(`"provider_error"` or `"timeout"`), `retryable`, and, when known, `status`,
+(`"provider_error"`, `"timeout"`, or `"invalid_request"` for a request nessi
+could not build and never sent), `retryable`, and, when known, `status`,
 `code`, `retryAfterMs`, `contextOverflow`, `overflowRatio`, and the timeout
 `scope`. Streaming `provider_error` issues carry the same `status`, `code`, and
 `retryAfterMs`. Nessi never retries; a caller abort throws the signal's reason.

@@ -1,4 +1,4 @@
-import { invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
@@ -322,7 +322,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       const response = await fetchCompleteResponse(`${baseURL}/chat/completions`, {
         method: "POST",
         headers,
-        body: JSON.stringify(withExtraBody(body, request, config)),
+        body: serializeRequest(config.name, withExtraBody(body, request, config)),
         signal: request.signal,
       }, config.name, config.timeouts);
 

@@ -1,4 +1,4 @@
-import { normalizeConnectionError, normalizeHttpError } from "./errors.js";
+import { normalizeConnectionError, normalizeHttpError, serializeRequest } from "./errors.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
 import type { ProviderTimeouts, RawStreamEvent } from "../types.js";
@@ -33,7 +33,7 @@ export const openSSEStream = async (
   contextWindow?: number,
   timeouts?: ProviderTimeouts,
 ): Promise<SSEStreamResult> => {
-  const serializedBody = JSON.stringify(body);
+  const serializedBody = serializeRequest(label, body);
   let response: Response;
   const controller = new AbortController();
   const abortExternal = () => controller.abort(signal?.reason);

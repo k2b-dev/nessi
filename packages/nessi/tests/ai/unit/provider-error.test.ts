@@ -143,3 +143,25 @@ describe("parseRetryAfterMs", () => {
     expect(parseRetryAfterMs(new Headers(headers), now)).toBe(expected);
   });
 });
+
+describe("requests nessi cannot build", () => {
+  const pdf = { messages: [{ role: "user" as const, content: [{ type: "file" as const, mediaType: "application/pdf", data: "JVBERi0=" }] }] };
+  const bigint = { ...request, extraBody: { seed: 1n } };
+
+  for (const { name, create } of providers) {
+    for (const [label, input] of [["an unsupported file type", pdf], ["a value JSON cannot represent", bigint]] as const) {
+      it(`${name} fails ${label} as not retryable without sending it`, async () => {
+        let sent = 0;
+        stubFetch(() => { sent++; return new Response("{}"); });
+        const native = await rejection(create().complete(input));
+        expect(native).toBeInstanceOf(ProviderError);
+        expect(native).toMatchObject({ kind: "invalid_request", retryable: false });
+        expect(await rejection(completeFromStream(create(), input))).toMatchObject({ retryable: false });
+        const issues = [];
+        for await (const event of create().stream(input)) if (event.type === "issue") issues.push(event.issue);
+        expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false })]);
+        expect(sent).toBe(0);
+      });
+    }
+  }
+});

@@ -1,4 +1,4 @@
-import { invalidResponseError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -215,7 +215,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const response = await fetchCompleteResponse(urlFor("generateContent"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildBody(request)),
+        body: serializeRequest("gemini", buildBody(request)),
         signal: request.signal,
       }, "gemini", options?.timeouts);
 

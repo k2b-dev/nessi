@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
@@ -172,7 +172,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const response = await fetchCompleteResponse(`${baseURL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("ollama", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "ollama", options?.timeouts);
 
@@ -217,6 +217,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       applyThink(body, request, options);
 
       let response: Response;
+      const serializedBody = serializeRequest("ollama", withExtraBody(body, request, options));
       const controller = new AbortController();
       const abortExternal = () => controller.abort(request.signal?.reason);
       const cleanupExternalAbort = () => {
@@ -235,7 +236,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           fetch(`${baseURL}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(withExtraBody(body, request, options)),
+            body: serializedBody,
             signal: controller.signal,
           }),
           new Promise<never>((_, reject) => {

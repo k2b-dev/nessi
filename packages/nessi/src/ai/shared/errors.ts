@@ -113,8 +113,11 @@ export const normalizeConnectionError = (label: string, error: unknown) => {
 };
 
 export type ProviderErrorDetails = {
-  /** `timeout` when a provider deadline ended the request; `provider_error` otherwise. */
-  kind: "provider_error" | "timeout";
+  /**
+   * `timeout` when a provider deadline ended the request, `invalid_request` when the request could
+   * not be built locally and nothing was sent, `provider_error` otherwise.
+   */
+  kind: "provider_error" | "timeout" | "invalid_request";
   retryable: boolean;
   /** HTTP status of a rejected request. */
   status?: number;
@@ -161,6 +164,19 @@ export const providerError = (
   { error, ...details }: { error: string } & Omit<ProviderErrorDetails, "kind">,
   options?: { cause?: unknown },
 ) => new ProviderError(error, { kind: "provider_error", ...details }, options);
+
+/** A request nessi cannot build, such as an unsupported file type; retrying cannot help. */
+export const invalidRequestError = (message: string, options?: { cause?: unknown }) =>
+  new ProviderError(message, { kind: "invalid_request", retryable: false }, options);
+
+/** The request body as JSON; values JSON cannot represent fail before anything is sent. */
+export const serializeRequest = (label: string, body: unknown) => {
+  try {
+    return JSON.stringify(body);
+  } catch (error) {
+    throw invalidRequestError(`${label} request is not serializable: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+};
 
 export const invalidResponseError = (label: string) =>
   new ProviderError(`${label} returned invalid JSON.`, { kind: "provider_error", retryable: true });

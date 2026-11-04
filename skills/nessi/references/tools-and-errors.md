@@ -282,8 +282,8 @@ retries; the error carries what a retry policy needs:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `"provider_error"`, or `"timeout"` when a provider deadline ended the request |
-| `retryable` | `true` for 408, 409, 425, 429, 5xx, connection failures, invalid JSON, and timeouts |
+| `kind` | `"provider_error"`; `"timeout"` when a provider deadline ended the request; `"invalid_request"` when nessi could not build the request (unsupported file type, a value JSON cannot represent) and sent nothing |
+| `retryable` | `true` for 408, 409, 425, 429, 5xx, connection failures, invalid JSON, and timeouts; `false` for `invalid_request` |
 | `status` | HTTP status of a rejected request |
 | `code` | Provider error code from the body, or the runtime code of a failed connection (`ECONNREFUSED`) |
 | `retryAfterMs` | Wait the provider asked for (`retry-after-ms`, then `retry-after`) |
@@ -305,7 +305,8 @@ try {
 ```
 
 Streaming `provider_error` issues carry the same `status`, `code`, and
-`retryAfterMs`. See [Provider timeouts](providers.md#provider-timeouts).
+`retryAfterMs`; a request nessi could not build arrives there with
+`retryable: false`. See [Provider timeouts](providers.md#provider-timeouts).
 
 ## Context overflow
 

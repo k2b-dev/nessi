@@ -1,4 +1,4 @@
-import { invalidResponseError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -268,7 +268,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${options?.apiKey ?? globalThis.process?.env?.MISTRAL_API_KEY ?? ""}`,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("mistral", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "mistral", options?.timeouts);
 
