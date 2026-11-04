@@ -1,4 +1,5 @@
-import { normalizeConnectionError, normalizeHttpError, serializeRequest } from "./errors.js";
+import { errorEnvelope, normalizeConnectionError, normalizeHttpError, readErrorBody, serializeRequest } from "./errors.js";
+import { parseJsonRecord } from "./json.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
 import type { ProviderTimeouts, RawStreamEvent } from "../types.js";
@@ -33,6 +34,8 @@ export const openSSEStream = async (
   contextWindow?: number,
   timeouts?: ProviderTimeouts,
 ): Promise<SSEStreamResult> => {
+  // An already aborted caller sends nothing; the stream reports the abort with the caller's reason.
+  signal?.throwIfAborted();
   const serializedBody = serializeRequest(label, body);
   let response: Response;
   const controller = new AbortController();
@@ -49,15 +52,20 @@ export const openSSEStream = async (
     ? Date.now() + timeouts.firstByteMs
     : undefined;
   try {
+    const request = fetch(url, {
+      method: "POST",
+      headers,
+      body: serializedBody,
+      // Credential headers such as x-api-key would follow a redirect to another origin.
+      redirect: "error",
+      signal: controller.signal,
+    });
+    // A fetch that ignores the signal can still answer after the deadline; release that body.
+    void request.then((late) => {
+      if (controller.signal.aborted) void late.body?.cancel().catch(() => {});
+    }, () => {});
     response = await Promise.race([
-      fetch(url, {
-        method: "POST",
-        headers,
-        body: serializedBody,
-        // Credential headers such as x-api-key would follow a redirect to another origin.
-        redirect: "error",
-        signal: controller.signal,
-      }),
+      request,
       new Promise<never>((_, reject) => {
         if (!timeouts?.firstByteMs || timeouts.firstByteMs <= 0) return;
         firstByteTimeout = setTimeout(() => {
@@ -114,6 +122,20 @@ export const openSSEStream = async (
     const normalized = await normalizeHttpError(label, response, undefined, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
     cleanupExternalAbort();
     return { ok: false, error: { type: "error", ...normalized } };
+  }
+
+  // Some gateways answer a stream request with a plain JSON body, usually an error envelope.
+  if (response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    const text = await readErrorBody(response, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
+    cleanupExternalAbort();
+    const record = parseJsonRecord<Record<string, unknown>>(text);
+    const envelope = record ? errorEnvelope(label, record) : undefined;
+    return {
+      ok: false,
+      error: envelope
+        ? { type: "error", ...envelope }
+        : { type: "error", error: `${label} answered a stream request with a JSON body instead of a stream.`, retryable: true },
+    };
   }
 
   const reader = response.body?.getReader();

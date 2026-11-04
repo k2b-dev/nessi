@@ -115,6 +115,8 @@ export type ProviderIssue = {
   status?: number;
   /** Provider error code from the body, or the runtime's connection error code. */
   code?: string;
+  /** nessi could not build the request (unsupported input, unserializable values) and sent nothing. */
+  notSent?: true;
   /** How long the provider asked the caller to wait (`retry-after-ms` or `retry-after`). */
   retryAfterMs?: number;
   contextOverflow?: boolean;
@@ -285,12 +287,10 @@ export type RawStreamEvent =
   };
 
 export type ProviderTimeouts = {
-  /** Streaming only: request start through the first response-body chunk. */
+  /** Request start through the first response-body chunk, which may precede the first token. */
   firstByteMs?: number;
-  /** Each body-read gap; native complete() starts this timer after response headers. */
+  /** Each gap between body chunks after the first. */
   idleMs?: number;
-  /** Native complete() only: request start through the entire response body. */
-  totalMs?: number;
 };
 
 export type Provider = {
@@ -299,8 +299,8 @@ export type Provider = {
   model: string;
   contextWindow?: number;
   capabilities: ProviderCapabilities;
+  /** The only request path. `complete(provider, request)` collects a stream into one result. */
   stream(request: GenerateRequest): AsyncIterable<StreamEvent>;
-  complete(request: GenerateRequest): Promise<GenerateResult>;
 };
 
 export type OpenAICompat = {

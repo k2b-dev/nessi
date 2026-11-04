@@ -6,7 +6,7 @@ endpoints. It returns a `Provider`:
 
 ```ts
 const provider = openAICompatible({ name, model, baseURL, apiKey, compat });
-await provider.complete(request);
+await complete(provider, request);
 for await (const event of provider.stream(request)) {}
 ```
 
@@ -17,7 +17,7 @@ speech-to-text file uploads. It returns a separate `TranscriptionProvider` with
 `name`, `model` and `transcribe(request)`, not a chat `Provider`.
 
 ```ts
-import { openAICompatibleTranscription } from "@k2b/nessi/ai";
+import { complete, openAICompatibleTranscription } from "@k2b/nessi/ai";
 
 const speech = openAICompatibleTranscription("whisper-large-v3", {
   baseURL: "https://api.scaleway.ai/v1",
@@ -55,7 +55,7 @@ should appear while the user speaks. It talks to vLLM's `/v1/realtime`
 WebSocket, for example with `mistralai/Voxtral-Mini-4B-Realtime-2602`.
 
 ```ts
-import { vllmRealtimeTranscription } from "@k2b/nessi/ai";
+import { complete, vllmRealtimeTranscription } from "@k2b/nessi/ai";
 
 const speech = vllmRealtimeTranscription("voxtral-realtime", {
   baseURL: "https://vllm.example.com/v1",
@@ -132,7 +132,7 @@ The provider layer also exposes a low-level `responseFormat` request option for
 apps that intentionally want a single provider call:
 
 ```ts
-const result = await provider.complete({
+const result = await complete(provider, {
   messages: [{ role: "user", content: [{ type: "text", text: "Extract a card." }] }],
   responseFormat: {
     type: "json_schema",
@@ -171,7 +171,7 @@ Provider mappings:
 ## Chat endpoints
 
 ```ts
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 
 const provider = openAICompatible({
   name: "mistral",
@@ -226,22 +226,17 @@ signed thinking, Ollama `num_ctx`) are not available there.
 ## Provider timeouts
 
 `openAICompatible()` accepts `timeouts` in its options. Unset or non-positive
-values disable the corresponding timeout.
+values disable the corresponding timeout. Every request is a stream, so both
+apply to `stream()` and `complete()`:
 
-- `stream()` and `completeFromStream()` use `firstByteMs` from request start
-  through the first response-body chunk, which may precede the first token.
-  Subsequent body-read gaps use `idleMs`. These calls do not use `totalMs`.
-- Native `complete()` uses `totalMs` from request start through the entire
-  response body. This includes generation before response headers arrive.
-  `idleMs` bounds each body read after headers, including the first read and
-  HTTP error bodies. Each chunk resets the idle timer, while the total
-  deadline keeps running. Native calls do not use `firstByteMs`.
+- `firstByteMs` from request start through the first response-body chunk,
+  which may precede the first token.
+- `idleMs` for each later gap between body chunks, and for reading an HTTP
+  error body.
 
-When upgrading from 0.17.1, add `totalMs` to retain a deadline for native
-`complete()` calls. Without it, waiting for native response headers has no
-provider timeout. A native timeout rejects with a `ProviderError` carrying
-`kind: "timeout"`, `scope: "provider_total"` or `"provider_idle"`, and
-`retryable: true`. Pass a request `signal` for caller-controlled cancellation;
+A timeout rejects with a `ProviderError` carrying `kind: "timeout"`, `scope:
+"provider_first_byte"` or `"provider_idle"`, and `retryable: true`. For an
+overall deadline pass a request `signal`, for example `AbortSignal.timeout(ms)`;
 its reason is preserved. These options apply to chat providers, not the
 separate transcription or decision APIs.
 

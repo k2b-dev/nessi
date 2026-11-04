@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openAICompatible, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
+import { complete, openAICompatible, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
 import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider, ProviderTimeouts, StreamEvent } from "../../../src/ai/types.js";
 import { ERROR_BODY_LIMIT_BYTES, readErrorBody } from "../../../src/ai/shared/errors.js";
@@ -85,7 +85,7 @@ describe("streaming error bodies", () => {
     it(`${name} complete() stops reading an endless error body`, async () => {
       const { response, counter } = endlessErrorBody();
       stubFetch(() => response);
-      await expect(bounded(create().complete(request))).rejects.toThrow("429");
+      await expect(bounded(complete(create(), request))).rejects.toThrow("429");
       expect(counter.pulls * 16 * 1024).toBeLessThanOrEqual(ERROR_BODY_LIMIT_BYTES + 3 * 16 * 1024);
     });
   }
@@ -105,10 +105,10 @@ describe("readErrorBody", () => {
     expect(body).toBe("a".repeat(ERROR_BODY_LIMIT_BYTES - 1));
   });
 
-  it("caps native completion error bodies by bytes, also in one large chunk", async () => {
+  it("caps error bodies by bytes, also in one large chunk", async () => {
     stubFetch(() => oneChunk(encoder.encode("€".repeat(ERROR_BODY_LIMIT_BYTES)), 500));
-    const error = await openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" })
-      .complete(request).catch((caught: unknown) => caught);
+    const error = await complete(openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }), request)
+      .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
     expect(encoder.encode(message).byteLength).toBeLessThanOrEqual(ERROR_BODY_LIMIT_BYTES + 100);

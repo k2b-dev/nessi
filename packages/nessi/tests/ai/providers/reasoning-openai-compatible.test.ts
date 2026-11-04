@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openAICompatible } from "../../../src/ai/index.js";
+import { complete, openAICompatible } from "../../../src/ai/index.js";
 import { endpoint } from "../helpers/endpoints.js";
 import type { GenerateRequest, Provider } from "../../../src/ai/index.js";
-import { stubFetch, textResponse } from "../helpers/fixtures.js";
+import { completionStream, stubFetch, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -22,7 +22,7 @@ const sentBodies = async (provider: Provider, request: Partial<GenerateRequest> 
       ? textResponse(streamBody, "text/event-stream")
       : new Response(JSON.stringify(completion), { headers: { "Content-Type": "application/json" } });
   });
-  await provider.complete({ messages: [], ...request });
+  await complete(provider, { messages: [], ...request });
   for await (const _event of provider.stream({ messages: [], ...request })) { /* drain */ }
   return bodies;
 };
@@ -73,7 +73,7 @@ describe("reasoning effort for OpenAI-compatible providers", () => {
 
 describe("OpenRouter reasoning_details round-trip", () => {
   it("collects streamed reasoning items and sends them back unchanged", async () => {
-    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { complete } = await import("../../../src/ai/index.js");
     const { fixtureText } = await import("../helpers/fixtures.js");
     const bodies: Array<Record<string, unknown>> = [];
     stubFetch(async (_input, init) => {
@@ -82,7 +82,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
     });
     const provider = endpoint("openrouter", { model: "anthropic/claude" });
 
-    const { message } = await completeFromStream(provider, { messages: [] });
+    const { message } = await complete(provider, { messages: [] });
 
     expect(message.provider).toBe("openrouter");
     // Without answer text, the items attach after the tool call so they cannot interrupt it.
@@ -99,7 +99,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
       },
     ]);
 
-    await completeFromStream(provider, {
+    await complete(provider, {
       messages: [
         { role: "user", content: ["Weather?"] },
         message,
@@ -114,7 +114,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
   });
 
   it("keeps a tool call valid when reasoning metadata arrives after it started", async () => {
-    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { complete } = await import("../../../src/ai/index.js");
     const { fixtureText } = await import("../helpers/fixtures.js");
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-late-signature.sse"), "text/event-stream"));
     const events = [];
@@ -123,7 +123,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
     expect(events.some((event) => event.type === "issue")).toBe(false);
 
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-late-signature.sse"), "text/event-stream"));
-    const { message } = await completeFromStream(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
+    const { message } = await complete(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
     const calls = message.content.filter((block) => block.type === "tool_call");
     const details = message.content.flatMap((block) => (block.type === "thinking" ? block.details ?? [] : []));
     expect(calls).toEqual([{ type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } }]);
@@ -131,11 +131,11 @@ describe("OpenRouter reasoning_details round-trip", () => {
   });
 
   it("holds reasoning text back while a tool call is still streaming", async () => {
-    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { complete } = await import("../../../src/ai/index.js");
     const { fixtureText } = await import("../helpers/fixtures.js");
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-interleaved.sse"), "text/event-stream"));
 
-    const { message } = await completeFromStream(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
+    const { message } = await complete(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
 
     expect(message.content).toEqual([
       { type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } },
@@ -148,11 +148,11 @@ describe("OpenRouter reasoning_details round-trip", () => {
   });
 
   it("joins a signature that arrives after the answer started with its reasoning item", async () => {
-    const { completeFromStream } = await import("../../../src/ai/index.js");
+    const { complete } = await import("../../../src/ai/index.js");
     const { fixtureText } = await import("../helpers/fixtures.js");
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-signature-after-answer.sse"), "text/event-stream"));
 
-    const { message } = await completeFromStream(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
+    const { message } = await complete(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
     const details = message.content.flatMap((block) => (block.type === "thinking" ? block.details ?? [] : []));
 
     expect(details).toEqual([{ type: "reasoning.text", text: "Greet.", signature: "sig", index: 0, format: "f1" }]);
@@ -175,20 +175,4 @@ describe("OpenRouter reasoning_details round-trip", () => {
     }
   });
 
-  it("parses reasoning items from non-streaming responses", async () => {
-    stubFetch(async () => new Response(JSON.stringify({
-      choices: [{
-        index: 0,
-        message: { role: "assistant", content: "Hi", reasoning_details: [{ type: "reasoning.summary", summary: "Greeting.", index: 0 }] },
-        finish_reason: "stop",
-      }],
-    }), { headers: { "Content-Type": "application/json" } }));
-
-    const { message } = await endpoint("openrouter", { model: "x/y" }).complete({ messages: [] });
-
-    expect(message.content).toEqual([
-      { type: "thinking", thinking: "Greeting.", details: [{ type: "reasoning.summary", summary: "Greeting.", index: 0 }] },
-      { type: "text", text: "Hi" },
-    ]);
-  });
 });

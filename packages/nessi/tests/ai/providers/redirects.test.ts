@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { cloudflareDecision, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
+import { cloudflareDecision, complete, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
 import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider, StreamEvent } from "../../../src/ai/types.js";
 
@@ -54,7 +54,7 @@ describe("provider redirects", () => {
   for (const { name, create } of providers) {
     it(`${name} completion refuses a redirect instead of resending credentials`, async () => {
       const { baseURL, leaked } = redirectingEndpoint();
-      await expect(create(baseURL).complete(request)).rejects.toThrow();
+      await expect(complete(create(baseURL), request)).rejects.toThrow();
       expect(leaked).toEqual([]);
     });
 

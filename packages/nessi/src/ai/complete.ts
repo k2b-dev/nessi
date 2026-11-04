@@ -9,7 +9,11 @@ import type {
 import { ProviderError } from "./shared/errors.js";
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./shared/messages.js";
 
-export const completeFromStream = async (
+/**
+ * One request as a single result: the provider's stream, collected. Failures throw a
+ * `ProviderError`; a caller abort throws the signal's reason.
+ */
+export const complete = async (
   /** `name`, when given, is recorded as the message's producer. */
   provider: Pick<Provider, "model" | "stream"> & { name?: string },
   request: GenerateRequest,
@@ -37,8 +41,14 @@ export const completeFromStream = async (
         }
         if (issue.kind === "provider_error") {
           request.signal?.throwIfAborted();
-          const { kind, message, ...details } = issue;
-          throw new ProviderError(message, { kind, ...details });
+          const { kind, message, notSent, ...details } = issue;
+          // A request nessi could not build keeps that kind; it was never sent.
+          throw new ProviderError(message, { kind: notSent ? "invalid_request" : kind, ...details });
+        }
+        // `complete()` has no recovery loop: a call that cannot run must not vanish from the answer.
+        if (issue.kind === "malformed_tool_call") {
+          request.signal?.throwIfAborted();
+          throw new ProviderError(issue.message, { kind: "provider_error", retryable: true, code: "malformed_tool_call" });
         }
         break;
       }

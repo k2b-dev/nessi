@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { completeFromStream } from "../../../src/ai/complete-from-stream.js";
+import { complete } from "../../../src/ai/complete.js";
 import { normalizeProviderStream } from "../../../src/ai/shared/tool-stream-normalizer.js";
 import type { GenerateRequest, Provider, RawStreamEvent } from "../../../src/ai/types.js";
 
@@ -7,7 +7,7 @@ async function* rawSource(events: RawStreamEvent[]) {
   for (const event of events) yield event;
 }
 
-describe("completeFromStream", () => {
+describe("complete", () => {
   it("aggregates text, thinking, tool calls and usage", async () => {
     const provider: Provider = {
       name: "mock",
@@ -25,12 +25,9 @@ describe("completeFromStream", () => {
           { type: "usage", usage: { input: 1, output: 2, total: 3 } },
         ]));
       },
-      complete(request: GenerateRequest) {
-        return completeFromStream(provider, request);
-      },
     };
 
-    const result = await completeFromStream(provider, { messages: [] });
+    const result = await complete(provider, { messages: [] });
     expect(result.finishReason).toBe("tool_use");
     expect(result.usage?.total).toBe(3);
     expect(result.message.content.map((block) => block.type)).toEqual(["thinking", "text", "tool_call"]);
@@ -53,12 +50,9 @@ describe("completeFromStream", () => {
           },
         ]));
       },
-      complete(request: GenerateRequest) {
-        return completeFromStream(provider, request);
-      },
     };
 
-    const result = await completeFromStream(provider, { messages: [] });
+    const result = await complete(provider, { messages: [] });
     expect(result.finishReason).toBe("max_tokens");
   });
 
@@ -76,12 +70,9 @@ describe("completeFromStream", () => {
           { type: "usage", usage: { input: 1, output: 0, total: 1 } },
         ]));
       },
-      complete(request: GenerateRequest) {
-        return completeFromStream(provider, request);
-      },
     };
 
-    const result = await completeFromStream(provider, { messages: [] });
+    const result = await complete(provider, { messages: [] });
     expect(result.message.content).toEqual([]);
   });
 });

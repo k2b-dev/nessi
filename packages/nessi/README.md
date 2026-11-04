@@ -16,7 +16,7 @@ bun add @k2b/nessi
 
 ```ts
 import { nessi, defineTool, memoryStore } from "@k2b/nessi";
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const weather = defineTool({
@@ -198,7 +198,7 @@ of a streamed chat response:
 
 ```ts
 import { nessi } from "@k2b/nessi";
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const result = await nessi.structured({
@@ -245,7 +245,7 @@ takes no tools; use the full `nessi()` loop for tool work.
 ## Provider-only usage
 
 ```ts
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 
 const provider = openAICompatible({
   name: "openrouter",
@@ -254,7 +254,7 @@ const provider = openAICompatible({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-const result = await provider.complete({
+const result = await complete(provider, {
   systemPrompt: "Be concise.",
   messages: [
     {
@@ -290,32 +290,24 @@ for await (const event of provider.stream({ messages })) {
 
 ## Provider timeouts
 
-Set `timeouts` in chat provider options to bound waits. Unset or non-positive
-values disable the corresponding timeout.
+Set `timeouts` in the provider options to bound waits. Unset or non-positive
+values disable the corresponding timeout. Every request is a stream, so both
+limits apply to `stream()` and `complete()` alike:
 
-| Option | `stream()` and `completeFromStream()` | Native `complete()` |
-| --- | --- | --- |
-| `firstByteMs` | Request start through the first response-body chunk, which may precede the first token | Ignored |
-| `idleMs` | Each body-read gap after the first chunk | Each body-read gap, starting after response headers |
-| `totalMs` | Ignored | Request start through the entire response body |
+| Option | Bounds |
+| --- | --- |
+| `firstByteMs` | Request start through the first response-body chunk, which may precede the first token |
+| `idleMs` | Each gap between body chunks after the first; also the read of an HTTP error body |
 
-Native endpoints often send headers only after generating the whole answer.
-`totalMs` includes that generation time and does not reset when body chunks
-arrive. `idleMs` resets on each chunk, so it detects stalled transfers without
-limiting total duration. Both limits also apply to HTTP error responses.
-
-**Migrating from 0.17.1:** `firstByteMs` no longer limits native `complete()`
-calls. Set `totalMs` to the maximum duration you want for those calls. Without
-`totalMs`, the wait for native response headers has no provider timeout; pass
-a request `signal` if the caller owns the deadline.
-
-A native timeout rejects with a `ProviderError` carrying `kind: "timeout"`,
-`scope: "provider_total"` or `"provider_idle"`, and `retryable: true`. Caller
-cancellation preserves the signal's original reason.
+A slow answer that keeps sending chunks never times out; a stalled one does. A
+timeout rejects with a `ProviderError` carrying `kind: "timeout"`, `scope:
+"provider_first_byte"` or `"provider_idle"`, and `retryable: true`. Caller
+cancellation preserves the signal's original reason. For an overall deadline,
+pass a request `signal` (for example `AbortSignal.timeout(ms)`).
 
 ## Provider errors
 
-`complete()` and `completeFromStream()` throw a `ProviderError` (from
+`complete()` throws a `ProviderError` (from
 `@k2b/nessi/ai`) when a provider request fails. It carries `kind`
 (`"provider_error"`, `"timeout"`, or `"invalid_request"` for a request nessi
 could not build and never sent), `retryable`, and, when known, `status`,
@@ -334,7 +326,7 @@ is sent when neither is set, so the model keeps its own default.
 const provider = openAICompatible({ name: "openai", model: "gpt-6.1-sol", baseURL: "https://api.openai.com/v1", reasoningEffort: "medium" });
 
 const loop = nessi({ provider, systemPrompt, input, store, reasoningEffort: "high" });
-const quick = await provider.complete({ messages, reasoningEffort: "none" });
+const quick = await complete(provider, { messages, reasoningEffort: "none" });
 ```
 
 The value is passed through unchanged, so new levels work without a Nessi
@@ -381,7 +373,7 @@ implements the OpenAI-compatible `/audio/transcriptions` endpoint. Configure
 the service URL, API key and transcription model explicitly:
 
 ```ts
-import { openAICompatibleTranscription } from "@k2b/nessi/ai";
+import { complete, openAICompatibleTranscription } from "@k2b/nessi/ai";
 
 const speech = openAICompatibleTranscription("whisper-large-v3", {
   baseURL: "https://api.scaleway.ai/v1",
@@ -431,7 +423,7 @@ It streams audio to vLLM's `/v1/realtime` WebSocket and yields text as the model
 recognizes it, for example with `mistralai/Voxtral-Mini-4B-Realtime-2602`:
 
 ```ts
-import { vllmRealtimeTranscription } from "@k2b/nessi/ai";
+import { complete, vllmRealtimeTranscription } from "@k2b/nessi/ai";
 
 const speech = vllmRealtimeTranscription("voxtral-realtime", {
   baseURL: "https://vllm.example.com/v1",
@@ -474,7 +466,7 @@ good fit for routing, triage and checks before an LLM acts. Nessi speaks the
 System One API (`POST /v1/systemone`) that these models share:
 
 ```ts
-import { systemOneDecision } from "@k2b/nessi/ai";
+import { complete, systemOneDecision } from "@k2b/nessi/ai";
 
 const router = systemOneDecision("clef-flash", {
   baseURL: "https://decide.example.com/v1",
@@ -526,7 +518,7 @@ promise, `signal` cancels with its reason, and there are no automatic retries.
 For Clef on Cloudflare Workers AI, use the preset:
 
 ```ts
-import { cloudflareDecision } from "@k2b/nessi/ai";
+import { complete, cloudflareDecision } from "@k2b/nessi/ai";
 
 const router = cloudflareDecision("clef-flash", {
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID!,

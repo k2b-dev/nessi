@@ -87,7 +87,9 @@ export const readErrorBody = async (response: Response, limits: ErrorBodyLimits 
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     while (true) {
-      const waits = [limits.idleMs, limits.deadlineAt === undefined ? undefined : limits.deadlineAt - Date.now()]
+      // A non-positive idle limit is disabled; an absolute deadline that has passed ends the read.
+      const idleMs = limits.idleMs !== undefined && limits.idleMs > 0 ? limits.idleMs : undefined;
+      const waits = [idleMs, limits.deadlineAt === undefined ? undefined : limits.deadlineAt - Date.now()]
         .filter((ms): ms is number => ms !== undefined && Number.isFinite(ms));
       const waitMs = waits.length > 0 ? Math.min(...waits) : undefined;
       if (waitMs !== undefined && waitMs <= 0) break;
@@ -160,8 +162,11 @@ const errorCode = (error: unknown) =>
  * A request whose connection failed; `code` is the runtime's, such as `ECONNREFUSED`. Bun sets it
  * on the error, Node on its `cause`.
  */
+/** The runtime's error code (`ECONNRESET`, …); Bun sets it on the error, Node on its `cause`. */
+export const runtimeErrorCode = (error: unknown) => errorCode(error) ?? (error instanceof Error ? errorCode(error.cause) : undefined);
+
 export const normalizeConnectionError = (label: string, error: unknown) => {
-  const code = errorCode(error) ?? (error instanceof Error ? errorCode(error.cause) : undefined);
+  const code = runtimeErrorCode(error);
   return { error: formatConnectionError(label, error), retryable: true, ...(code !== undefined ? { code } : {}) };
 };
 
@@ -181,11 +186,11 @@ export type ProviderErrorDetails = {
   contextOverflow?: boolean;
   overflowRatio?: number;
   /** The deadline that ended the request, when `kind` is `timeout`. */
-  scope?: "provider_first_byte" | "provider_idle" | "provider_total";
+  scope?: "provider_first_byte" | "provider_idle";
 };
 
 /**
- * A failed provider request from `complete()` or `completeFromStream()`. It carries what a caller
+ * A failed provider request from `complete()`. It carries what a caller
  * needs to decide on a retry; nessi itself never retries. Caller aborts throw the signal's reason.
  */
 export class ProviderError extends Error implements ProviderErrorDetails {
@@ -212,11 +217,6 @@ export class ProviderError extends Error implements ProviderErrorDetails {
   }
 }
 
-/** Throwable form of `normalizeHttpError()` or `normalizeConnectionError()`. */
-export const providerError = (
-  { error, ...details }: { error: string } & Omit<ProviderErrorDetails, "kind">,
-  options?: { cause?: unknown },
-) => new ProviderError(error, { kind: "provider_error", ...details }, options);
 
 /** A request nessi cannot build, such as an unsupported file type; retrying cannot help. */
 export const invalidRequestError = (message: string, options?: { cause?: unknown }) =>
@@ -241,8 +241,6 @@ export const serializeRequest = (label: string, body: unknown) => {
   }
 };
 
-export const invalidResponseError = (label: string) =>
-  new ProviderError(`${label} returned invalid JSON.`, { kind: "provider_error", retryable: true });
 
 /** A stream record that is not a JSON object; content it carried would otherwise vanish. */
 export const malformedRecordError = (label: string) => ({

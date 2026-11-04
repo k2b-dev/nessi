@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { complete } from "../src/ai/index.js";
 import { z } from "zod";
 import { endpoint, ENDPOINT_NAMES } from "./ai/helpers/endpoints.js";
 import type { Provider, StreamEvent } from "../src/ai/types.js";
@@ -6,7 +7,7 @@ import { nessi } from "../src/nessi.js";
 import { memoryStore } from "../src/stores.js";
 import { defineTool } from "../src/tools.js";
 import type { OutboundEvent, ProviderRequest, Tool } from "../src/types.js";
-import { jsonResponse, stubFetch, textResponse } from "./ai/helpers/fixtures.js";
+import { completionStream, stubFetch, textResponse } from "./ai/helpers/fixtures.js";
 import { mockProviderMultiTurn } from "./mock-provider.js";
 
 const originalFetch = globalThis.fetch;
@@ -77,9 +78,9 @@ const malformedArguments: unknown[] = ['{"target":', "[]", '"all"', 42, [], ["al
 describe("tool arguments", () => {
   for (const { name, create, valid, native, stream, answer } of cases) {
     for (const args of malformedArguments) {
-      it(`${name} completion rejects ${JSON.stringify(args)} instead of returning {}`, async () => {
-        stubFetch(() => jsonResponse(native(args)));
-        await expect(create().complete(request)).rejects.toThrow('malformed JSON arguments for "wipe"');
+      it(`${name} complete() rejects ${JSON.stringify(args)} instead of returning {}`, async () => {
+        stubFetch(() => completionStream(native(args)));
+        await expect(complete(create(), request)).rejects.toMatchObject({ code: "malformed_tool_call", retryable: true });
       });
 
       it(`${name} stream reports ${JSON.stringify(args)} as a malformed call`, async () => {
@@ -94,13 +95,13 @@ describe("tool arguments", () => {
       const toolArgs = async (response: () => Response, mode: "complete" | "stream") => {
         stubFetch(response);
         const content = mode === "complete"
-          ? (await create().complete(request)).message.content
+          ? (await complete(create(), request)).message.content
           : (await collect<StreamEvent>(create().stream(request))).flatMap((event) => event.type === "block_end" ? [event.block] : []);
         return content.flatMap((block) => block.type === "tool_call" ? [block.args] : []);
       };
-      expect(await toolArgs(() => jsonResponse(native(valid)), "complete")).toEqual([{ target: "one" }]);
+      expect(await toolArgs(() => completionStream(native(valid)), "complete")).toEqual([{ target: "one" }]);
       expect(await toolArgs(() => stream(valid), "stream")).toEqual([{ target: "one" }]);
-      expect(await toolArgs(() => jsonResponse(native(undefined)), "complete")).toEqual([{}]);
+      expect(await toolArgs(() => completionStream(native(undefined)), "complete")).toEqual([{}]);
       expect(await toolArgs(() => stream(undefined), "stream")).toEqual([{}]);
     });
 

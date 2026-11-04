@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { z } from "zod";
 import { defineTool, nessi, StructuredOutputError } from "../src/index.js";
-import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
+import { mockProvider, mockProviderMultiTurn, resultStream, streamFromResult } from "./mock-provider.js";
 import { endpoint } from "./ai/helpers/endpoints.js";
 import type { GenerateResult, Provider } from "../src/ai/index.js";
 import type { ProviderRequest } from "../src/types.js";
@@ -34,11 +34,10 @@ const completeProvider = (responses: string[], structuredOutput: boolean) => {
       usage: true,
       structuredOutput,
     },
-    async *stream() {},
-    async complete(request) {
+    stream(request) {
       requests.push(request);
       const index = callIndex++;
-      return textResult(responses[Math.min(index, responses.length - 1)] ?? "{}", index);
+      return streamFromResult(textResult(responses[Math.min(index, responses.length - 1)] ?? "{}", index));
     },
   };
   return { provider, requests };
@@ -173,10 +172,10 @@ describe("nessi.structured", () => {
 
     try {
       const { provider } = completeProvider(["{\"title\":\"Launch\",\"count\":2}"], true);
-      const baseComplete = provider.complete;
-      provider.complete = async (request) => {
+      const baseStream = provider.stream;
+      provider.stream = (request) => {
         now += 250;
-        return baseComplete(request);
+        return baseStream(request);
       };
 
       const result = await nessi.structured({
@@ -204,9 +203,9 @@ describe("nessi.structured", () => {
   it("wraps direct-mode provider failures in StructuredOutputError", async () => {
     const provider: Provider = {
       ...mockProvider([]),
-      complete: async () => {
+      stream: () => resultStream(async () => {
         throw new Error("upstream unavailable");
-      },
+      }),
     };
 
     const caught = await nessi.structured({
@@ -226,22 +225,17 @@ describe("nessi.structured", () => {
     ["aborted", "aborted"],
   ] as const) {
     it(`never accepts or repairs a ${stopReason} response`, async () => {
-      // Each field alone must stop it, with valid output (no accept) and invalid output (no repair).
-      for (const [structuredOutput, field, text] of [
-        [true, "finishReason", '{"ok":true}'],
-        [false, "stopReason", '{"ok":true}'],
-        [false, "finishReason", "not json"],
-        [true, "stopReason", "not json"],
+      // Valid output must not be accepted and invalid output must not be repaired, in both modes.
+      for (const [structuredOutput, text] of [
+        [true, '{"ok":true}'],
+        [false, '{"ok":true}'],
+        [false, "not json"],
+        [true, "not json"],
       ] as const) {
         let calls = 0;
         const provider: Provider = {
           ...completeProvider([], structuredOutput).provider,
-          complete: async () => {
-            const result = textResult(text, calls++);
-            return field === "finishReason"
-              ? { ...result, finishReason: stopReason }
-              : { ...result, message: { ...result.message, stopReason } };
-          },
+          stream: () => resultStream(async () => ({ ...textResult(text, calls++), finishReason: stopReason })),
         };
         const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
           .catch((error: unknown) => error);
@@ -256,11 +250,11 @@ describe("nessi.structured", () => {
     let calls = 0;
     const provider: Provider = {
       ...completeProvider([], false).provider,
-      complete: async () => {
+      stream: () => resultStream(async () => {
         const index = calls++;
         const result = textResult(index === 0 ? "not json" : '{"ok":true}', index);
         return index === 0 ? result : { ...result, finishReason: "max_tokens", message: { ...result.message, stopReason: "max_tokens" } };
-      },
+      }),
     };
     const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
       .catch((error: unknown) => error);
@@ -277,10 +271,10 @@ describe("nessi.structured", () => {
     try {
       const provider: Provider = {
         ...completeProvider([], false).provider,
-        complete: async () => {
+        stream: () => resultStream(async () => {
           now += 500;
           throw new Error("upstream unavailable");
-        },
+        }),
       };
       const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
         .catch((error: unknown) => error);
@@ -294,10 +288,10 @@ describe("nessi.structured", () => {
     let calls = 0;
     const provider: Provider = {
       ...completeProvider([], false).provider,
-      complete: async () => {
+      stream: () => resultStream(async () => {
         if (calls++ === 0) return textResult("not json", 0);
         throw new Error("upstream unavailable");
-      },
+      }),
     };
     const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
       .catch((error: unknown) => error);
@@ -308,10 +302,10 @@ describe("nessi.structured", () => {
     const controller = new AbortController();
     const provider: Provider = {
       ...completeProvider([], true).provider,
-      complete: async () => {
+      stream: () => resultStream(async () => {
         controller.abort();
         return textResult('{"ok":true}', 0);
-      },
+      }),
     };
     const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }), signal: controller.signal })
       .catch((error: unknown) => error);

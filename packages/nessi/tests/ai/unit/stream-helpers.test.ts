@@ -12,16 +12,25 @@ describe("openSSEStream", () => {
   const largeBody = { input: "x".repeat(4_000) };
 
   it("does not classify a user abort of a large request as context overflow", async () => {
+    const controller = new AbortController();
+    // The caller aborts while the request is in flight.
     stubFetch(async () => {
+      controller.abort();
       throw new DOMException("The operation was aborted.", "AbortError");
     });
-    const controller = new AbortController();
-    controller.abort();
 
     const result = await openSSEStream("https://example.com", {}, largeBody, "custom", controller.signal, 1_000);
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.type === "error" ? result.error.contextOverflow : "missing").toBeUndefined();
+  });
+
+  it("sends nothing for a signal that is already aborted", async () => {
+    let sent = false;
+    stubFetch(async () => { sent = true; return new Response(""); });
+    const reason = new Error("caller stopped");
+    await expect(openSSEStream("https://example.com", {}, largeBody, "custom", AbortSignal.abort(reason), 1_000)).rejects.toBe(reason);
+    expect(sent).toBe(false);
   });
 
   it("keeps the network-error overflow guess to browsers", async () => {

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { ProviderError } from "../../../src/ai/index.js";
+import { complete, ProviderError } from "../../../src/ai/index.js";
 import { endpoint } from "../helpers/endpoints.js";
 import type { Provider, StreamEvent } from "../../../src/ai/types.js";
-import { jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
+import { completionStream, jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -88,9 +88,9 @@ describe("stream records", () => {
       expect(await issuesOf(create())).toEqual([expect.objectContaining({ kind: "provider_error", retryable: true })]);
     });
 
-    it(`${name} complete() rejects an HTTP 200 error body`, async () => {
+    it(`${name} complete() rejects an HTTP 200 JSON error body sent instead of a stream`, async () => {
       stubFetch(() => jsonResponse({ error: { message: "upstream failed", code: 500 } }));
-      const error = await create().complete(request).catch((caught: unknown) => caught);
+      const error = await complete(create(), request).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(ProviderError);
       expect(error).toMatchObject({ retryable: true, status: 500, message: expect.stringContaining("upstream failed") });
     });
@@ -112,37 +112,22 @@ describe("stream records", () => {
   });
 });
 
-describe("success-shaped bodies without a result", () => {
-  for (const [name, create, body] of [
-    ["openai-compatible", cases[0]!.create, {}],
-    ["openai-compatible", cases[0]!.create, { choices: [{}] }],
-    ["mistral", cases[1]!.create, { choices: [] }],
-    ["mistral", cases[1]!.create, { choices: [{ index: 0 }] }],
-    ["openrouter", cases[2]!.create, { choices: null }],
-    ["vllm", cases[3]!.create, { id: "chatcmpl-1" }],
-  ] as const) {
-    it(`${name} complete() rejects ${JSON.stringify(body)}`, async () => {
-      stubFetch(() => jsonResponse(body));
-      await expect(create().complete(request)).rejects.toBeInstanceOf(ProviderError);
-    });
-  }
-
+describe("answers without content", () => {
   it("keeps empty answers and content-free stops", async () => {
-    stubFetch(() => jsonResponse({ choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "stop" }] }));
-    expect((await cases[0]!.create().complete(request)).finishReason).toBe("stop");
+    stubFetch(() => completionStream({ choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "stop" }] }));
+    expect((await complete(cases[0]!.create(), request)).finishReason).toBe("stop");
     // A filter stop may come without a message.
-    stubFetch(() => jsonResponse({ choices: [{ index: 0, finish_reason: "content_filter" }] }));
-    expect((await cases[2]!.create().complete(request)).finishReason).toBe("error");
+    stubFetch(() => completionStream({ choices: [{ index: 0, finish_reason: "content_filter" }] }));
+    expect((await complete(cases[2]!.create(), request)).finishReason).toBe("error");
   });
-
 });
 
 describe("OpenAI refusals", () => {
   it("complete() returns the refusal as text that ends with a provider-side stop", async () => {
-    stubFetch(() => jsonResponse({
+    stubFetch(() => completionStream({
       choices: [{ index: 0, message: { role: "assistant", content: null, refusal: "I can't help with that." }, finish_reason: "stop" }],
     }));
-    const result = await cases[0]!.create().complete(request);
+    const result = await complete(cases[0]!.create(), request);
     expect(result.finishReason).toBe("error");
     expect(result.message.content).toEqual([{ type: "text", text: "I can't help with that." }]);
   });

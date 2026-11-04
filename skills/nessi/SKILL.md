@@ -22,7 +22,7 @@ scope.
    - Use the `@k2b/nessi` root exports when the user wants an agent loop that executes tools, stores conversation history, handles approvals, or compacts context.
 4. Produce working TypeScript that matches the current public API:
    - Root agent APIs come from `@k2b/nessi`.
-   - Chat provider constructors come from `@k2b/nessi/ai`, then expose `complete(request)` and `stream(request)`. The transcription constructor takes `(model, options)` with a required `baseURL`.
+   - The chat provider (`openAICompatible()`) comes from `@k2b/nessi/ai` and exposes `stream(request)`; `complete(provider, request)` from the same module collects one result. The transcription constructor takes `(model, options)` with a required `baseURL`.
 
 ## Reference routing
 
@@ -49,7 +49,7 @@ Read only the references needed for the task:
 - Keep queue claims, delivery guarantees, and persistence schemas inside the application. Nessi only decides when returned steering messages can affect execution.
 - Treat `event.aggregate.timing.totalElapsedMs` as generation plus active tool execution time; it intentionally excludes `actionWaitMs` for approval/client-tool waits. Use `timing.generationMs` for output-token throughput via `timing.outputTokensPerSecond`.
 - For `nessi.structured()`, require a Zod `output` schema and return `result.output`; use `result.structuredMeta` and `result.aggregate` for diagnostics. It takes no tools; use `nessi()` for tool work.
-- For provider-only structured output, pass `responseFormat` to `provider.complete()` only when the user explicitly needs the low-level provider request. Prefer `nessi.structured()` for consumer code that needs validated typed output.
+- For provider-only structured output, pass `responseFormat` to `complete(provider, request)` only when the user explicitly needs the low-level provider request. Prefer `nessi.structured()` for consumer code that needs validated typed output.
 - For standalone `compact()` loops, use the same `loopId` grouping pattern and handle `loop_start`, `compaction_start`, `compaction_end`, `issue`, and `loop_end`.
 - Treat `issue.kind === "malformed_tool_call"` and `issue.kind === "cancelled_tool_call"` as pre-execution stream issues. They mean no executable tool call exists for that pending provider start.
 - Treat `tool_execution_start` / `tool_execution_end` as Nessi's tool-runtime attempt boundary. `tool_action_request` is the event that asks the app for approval or client-side tool output.
@@ -79,7 +79,7 @@ import { mergeUsage, cloneLoopAggregate, mergeLoopAggregates } from "@k2b/nessi"
 Provider constructors:
 
 ```ts
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 ```
 
 `openAICompatible()` is the only chat adapter; take each endpoint's `compat`
@@ -94,7 +94,7 @@ import { openAICompatible } from "@k2b/nessi/ai/providers/openai-compatible";
 Common request shape:
 
 ```ts
-const result = await provider.complete({
+const result = await complete(provider, {
   systemPrompt: "Be concise.",
   messages: [
     { role: "user", content: [{ type: "text", text: "Summarize this." }] },
@@ -108,7 +108,7 @@ Common structured-output shape:
 
 ```ts
 import { nessi } from "@k2b/nessi";
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const result = await nessi.structured({

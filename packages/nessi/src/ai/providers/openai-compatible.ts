@@ -1,7 +1,6 @@
-import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
-import { fetchCompleteResponse } from "../shared/complete-response.js";
-import { appendAssistantContentBlock, assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
-import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
+import { buildRequest, errorEnvelope, malformedRecordError, streamEndedError } from "../shared/errors.js";
+import { assertOnlySupportedFiles } from "../shared/messages.js";
+import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -9,16 +8,13 @@ import { createStrictToolCallIdFactory, fallbackToolCallPrefix } from "../shared
 import { toOpenAITools } from "../shared/tools.js";
 import { makeUsage } from "../shared/usage.js";
 import type {
-  AssistantContentBlock,
   AssistantStopReason,
   GenerateRequest,
-  GenerateResult,
   Message,
   OpenAICompatibleConfig,
   Provider,
   RawStreamEvent,
   StreamEvent,
-  ToolCallBlock,
   Usage,
 } from "../types.js";
 
@@ -41,26 +37,6 @@ type OAIResponseContent = string | null | Array<{ type: "text"; text: string } |
 
 const chunkThinking = (chunk: OAIThinkingChunk) =>
   typeof chunk.thinking === "string" ? chunk.thinking : chunk.thinking.map((part) => part.text ?? "").join("");
-
-/** Content blocks in response order; reasoning chunks keep their signature, or are dropped without `withThinking`. */
-const contentBlocks = (content: OAIResponseContent | undefined, withThinking: boolean): AssistantContentBlock[] => {
-  const blocks: AssistantContentBlock[] = [];
-  if (typeof content === "string") {
-    if (content) appendAssistantContentBlock(blocks, { type: "text", text: content });
-    return blocks;
-  }
-  for (const chunk of content ?? []) {
-    if (chunk.type === "text" && "text" in chunk) appendAssistantContentBlock(blocks, { type: "text", text: chunk.text });
-    else if (chunk.type === "thinking" && "thinking" in chunk && withThinking) {
-      appendAssistantContentBlock(blocks, {
-        type: "thinking",
-        thinking: chunkThinking(chunk),
-        ...(chunk.signature !== undefined ? { signature: chunk.signature } : {}),
-      });
-    }
-  }
-  return blocks;
-};
 
 type OAIToolCall = {
   id: string;
@@ -263,62 +239,6 @@ const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleCon
   return config.compat?.thinkingFormat === "text" ? text || details : details || text;
 };
 
-const parseCompletionResponse = async (response: Response, config: OpenAICompatibleConfig): Promise<GenerateResult> => {
-  const payload = parseJsonRecord<SSEChunk>(await response.text());
-  if (!payload) throw invalidResponseError(config.name);
-  // Some gateways answer HTTP 200 with an error body.
-  const envelope = errorEnvelope(config.name, payload);
-  if (envelope) throw providerError(envelope);
-  const choice = payload.choices?.[0];
-  // An empty message is a valid answer; a choice with neither a message nor a finish reason is not.
-  if (!choice || (!isRecord(choice.message) && !choice.finish_reason)) {
-    throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
-  }
-  const message = choice?.message;
-  const withThinking = config.compat?.thinkingFormat !== "none";
-  const answer = contentBlocks(message?.content, withThinking);
-  const thinking: AssistantContentBlock[] = [];
-  // Typed reasoning chunks carry the signature; the plain fields would only repeat their text.
-  if (withThinking && !answer.some((block) => block.type === "thinking")) {
-    if (message?.reasoning_details?.length && config.compat?.thinkingFormat !== "text") {
-      const details = message.reasoning_details;
-      thinking.push({ type: "thinking", thinking: details.map(readableReasoning).join(""), details });
-    } else {
-      const text = message?.reasoning || message?.reasoning_content || "";
-      if (text) thinking.push({ type: "thinking", thinking: text });
-    }
-  }
-  const idPrefix = fallbackToolCallPrefix(config.name);
-  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => {
-    const name = call.function?.name ?? "";
-    const args = parseToolArguments(call.function?.arguments);
-    if (!args) throw malformedToolArgumentsError(config.name, name);
-    return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
-  });
-
-  const usage = usageFromChunk(payload);
-  // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
-  const refusal = message?.refusal || "";
-  const finishReason = refusal ? "error" : mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
-  if (refusal) appendAssistantContentBlock(answer, { type: "text", text: refusal });
-
-  return {
-    message: buildAssistantMessageFromContent(
-      config.model,
-      [...thinking, ...answer, ...toolCalls],
-      usage,
-      finishReason,
-      config.name,
-    ),
-    usage,
-    finishReason,
-    providerMeta: {
-      model: config.model,
-      requestId: response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined,
-    },
-  };
-};
-
 /** Sends the reasoning effort in the configured wire format. */
 const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest, config: OpenAICompatibleConfig) => {
   const effort = resolveReasoning(request, config);
@@ -345,44 +265,6 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       usage: true,
       structuredOutput: config.compat?.structuredOutput !== undefined && config.compat.structuredOutput !== false,
       ...(config.compat?.structuredOutput === "vllm_structured_outputs" ? { strictStructuredOutput: false } : {}),
-    },
-
-    async complete(request: GenerateRequest): Promise<GenerateResult> {
-      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
-      const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
-      const body: Record<string, unknown> = {
-        model: config.model,
-        messages,
-        stream: false,
-      };
-      if (tools) body.tools = tools;
-      applyResponseFormat(body, request, config);
-      if (request.maxOutputTokens !== undefined) {
-        body[config.compat?.maxTokensField ?? "max_completion_tokens"] = request.maxOutputTokens;
-      }
-      applyReasoning(body, request, config);
-      const temperature = resolveTemperature(request);
-      if (temperature !== undefined) body.temperature = temperature;
-
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        ...config.headers,
-      };
-      if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
-
-      const response = await fetchCompleteResponse(`${baseURL}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: serializeRequest(config.name, withExtraBody(body, request, config)),
-        signal: request.signal,
-      }, config.name, config.timeouts);
-
-      if (!response.ok) {
-        const normalized = await normalizeHttpError(config.name, response);
-        throw providerError(normalized);
-      }
-
-      return parseCompletionResponse(response, config);
     },
 
     stream(request: GenerateRequest): AsyncIterable<StreamEvent> {
