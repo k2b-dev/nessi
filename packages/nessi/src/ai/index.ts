@@ -76,6 +76,7 @@ export type {
   ToolStreamIssueReason,
   ToolSpec,
   TimeoutIssue,
+  TransportReport,
   Usage,
   UserMessage,
   OpenAICompat,

@@ -219,6 +219,25 @@ export type GenerateRequest = {
   reasoningEffort?: ReasoningEffort;
   /** Extra request body fields for this call, merged over the provider's `extraBody`. */
   extraBody?: Record<string, unknown>;
+  /**
+   * Called once when a request nessi sent settles: answered, rejected, failed, timed out, or
+   * aborted. Observation only; an error thrown here does not change the request.
+   */
+  onTransport?: (report: TransportReport) => void;
+};
+
+/** What the transport saw of one request; times are `Date.now()` milliseconds. */
+export type TransportReport = {
+  startedAt: number;
+  /** Response headers arrived; missing when no response came. */
+  headersAt?: number;
+  /** The first body chunk arrived. */
+  firstByteAt?: number;
+  status?: number;
+  /** How long the provider asked the caller to wait (`retry-after-ms` or `retry-after`). */
+  retryAfterMs?: number;
+  /** The runtime's code when the connection failed before a response (`ECONNREFUSED`, …). */
+  connectionCode?: string;
 };
 
 export type GenerateResult = {

@@ -296,6 +296,11 @@ try {
 }
 ```
 
+For timings and status of every request, including successful ones, pass
+`onTransport(report)` on the request: it runs once when the request settles,
+with `startedAt`, `headersAt`, `firstByteAt`, `status`, `retryAfterMs`, and
+`connectionCode`. No `fetch` patch is needed.
+
 Streaming `provider_error` issues carry the same `status`, `code`, and
 `retryAfterMs`; a request nessi could not build arrives there with
 `retryable: false`. See [Provider timeouts](providers.md#provider-timeouts).
