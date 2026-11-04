@@ -110,6 +110,12 @@ export type ProviderIssue = {
   kind: "provider_error";
   message: string;
   retryable: boolean;
+  /** HTTP status of a rejected request. */
+  status?: number;
+  /** Provider error code from the body, or the runtime's connection error code. */
+  code?: string;
+  /** How long the provider asked the caller to wait (`retry-after-ms` or `retry-after`). */
+  retryAfterMs?: number;
   contextOverflow?: boolean;
   overflowRatio?: number;
 };
@@ -179,6 +185,11 @@ export type ProviderCapabilities = {
   thinking: boolean;
   usage: boolean;
   structuredOutput?: boolean;
+  /**
+   * Native structured output follows strict JSON Schema rules: every object property is required.
+   * Defaults to `true`; guided decoding such as vLLM's `structured_outputs` sets `false`.
+   */
+  strictStructuredOutput?: boolean;
 };
 
 /**
@@ -272,7 +283,16 @@ export type RawStreamEvent =
   | ({ type: "tool_cancel" } & Omit<ToolStreamIssue, "kind">)
   | { type: "usage"; usage: Usage; finishReason?: AssistantStopReason }
   | { type: "timeout"; scope: "provider_first_byte" | "provider_idle"; message: string; retryable: boolean }
-  | { type: "error"; error: string; retryable: boolean; contextOverflow?: boolean; overflowRatio?: number };
+  | {
+    type: "error";
+    error: string;
+    retryable: boolean;
+    status?: number;
+    code?: string;
+    retryAfterMs?: number;
+    contextOverflow?: boolean;
+    overflowRatio?: number;
+  };
 
 export type ProviderTimeouts = {
   /** Streaming only: request start through the first response-body chunk. */

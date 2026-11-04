@@ -105,6 +105,7 @@ export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProv
         questions,
         ...(images?.length ? { images: images.map((image) => `data:${image.mediaType};base64,${image.data}`) } : {}),
       }),
+      redirect: "error",
       signal,
     }).catch((error: unknown) => {
       signal?.throwIfAborted();
