@@ -167,6 +167,17 @@ retries fail, the loop reports an issue and ends with `"error"`. Cancelled calls
 and provider-stopped responses do not trigger recovery. Provider-only `/ai`
 streams report issues without managing retries or executing tools.
 
+## Parallel tool calls
+
+`defineTool({ ..., concurrency: "parallel" })` lets neighbouring calls of one
+response run together; the default is `"serial"`. Approval tools and client
+tools always run alone. `maxParallelToolCalls` (default 4) bounds a group.
+Results are stored in call order, each `tool_execution_end` follows its stored
+result, every call keeps its `timeoutMs`, an abort cancels all running calls,
+and nested approval or client-tool requests reach the app one at a time. Mark
+only independent tools, typically reads, and add `replay: "safe"` when a
+resumed loop may run them again.
+
 ## Dynamic root-loop tools
 
 Use a resolver when the active root-loop tools depend on application state:

@@ -103,20 +103,55 @@ error result with `reason: "not_run"` that asks for a shorter response, and the
 model gets another turn, as for malformed calls.
 
 A loop resumed without `input` runs the calls of the last response that have no
-result. Calls run one at a time in order, so only the first of them can have
-been running when the run stopped. If it belongs to a server tool without
-`needsApproval`, it may already have had its effect: nessi answers it with
-`reason: "not_returned"` instead of running it again, unless the tool is
-defined with `replay: "safe"` (running it twice does no harm, for example a
-read). The calls after it never started and run normally. A call that needs
-approval runs only after the approval the resumed loop receives; client tools
-get their request again.
+result, one at a time. Calls run in order and store their results in call
+order, so only the first of them, and the rest of its
+[parallel group](#parallel-tool-calls), can have been running when the run
+stopped. Such a call of a server tool without `needsApproval` may already have
+had its effect: nessi answers it with `reason: "not_returned"` instead of
+running it again, unless the tool is defined with `replay: "safe"` (running it
+twice does no harm, for example a read). The calls after them never started and
+run normally. A call that needs approval runs only after the approval the
+resumed loop receives; client tools get their request again.
 
 Recovery allows two retries after consecutive turns with malformed or cut-off
 calls, subject to `maxTurns`; a resumed loop counts the turns its history
 already spent. Another turn resets this limit. If both retries fail, the loop
 reports an issue and ends with `"error"`. Cancelled calls and responses stopped
 by the provider do not trigger recovery.
+
+## Parallel tool calls
+
+A response often asks for several independent reads at once. Define such tools
+with `concurrency: "parallel"`, and neighbouring calls to them run at the same
+time:
+
+```ts
+const readFile = defineTool({
+  name: "read_file",
+  description: "Read a file",
+  inputSchema: z.object({ path: z.string() }),
+  concurrency: "parallel",
+  replay: "safe",
+}).server(async ({ path }) => fs.readFile(path, "utf8"));
+```
+
+- Tools run alone (`"serial"`) unless they are marked. Tools with
+  `needsApproval` and client tools always run alone. Mark only tools that do
+  not depend on each other's effects.
+- Consecutive parallel calls of one response form a group; a serial call waits
+  until the group before it has finished, and the next group waits for it.
+- `maxParallelToolCalls` (default 4) bounds how many calls of a group run at
+  once. In sampled Cloud chats, 98 % of the responses with tool calls had at
+  most three.
+- Results are stored in call order. A call stores its result, and sends its
+  `tool_execution_end`, once every earlier call of its group has finished.
+- Each call keeps its own `timeoutMs`. An abort cancels the `ctx.signal` of
+  every running call.
+- Nested `ctx.requestApproval()` and `ctx.requestClientTool()` requests of
+  parallel calls reach the app one at a time: the next `tool_action_request`
+  comes after the previous one was answered.
+- `aggregate.timing.toolExecutionMs` counts a group's wall time once, without
+  the time spent waiting for the app.
 
 ## Dynamic tools
 
@@ -611,6 +646,7 @@ import { systemOneDecision } from "@k2b/nessi/ai/providers/systemone-decision";
 - Server tools and client tools
 - Tool approval flow and explicit `tool_action_request` events
 - Tool execution start/end events with per-tool `timeoutMs`
+- Opt-in parallel tool calls with a bounded limit and results in call order
 - Optional per-tool historical result representations for bounded future context
 - Structured `issue` events for provider errors, timeouts, malformed tool streams, and tool execution failures
 - Pluggable session store

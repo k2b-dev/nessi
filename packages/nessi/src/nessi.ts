@@ -253,6 +253,35 @@ const malformedRecoveryExhausted = (): NessiIssue => ({
   retryable: false,
 });
 
+const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 4;
+
+const runsInParallel = (tool: Tool | undefined): boolean =>
+  tool?.kind === "server"
+  && tool.def.concurrency === "parallel"
+  && !tool.def.needsApproval
+  && !(tool.def as { terminal?: boolean }).terminal;
+
+/**
+ * Splits a response's calls into the groups they run in, in order: consecutive parallel calls
+ * share a group, every other call runs alone. A repeated call ID starts a new group.
+ */
+const groupToolCalls = (calls: ToolCallBlock[], toolMap: ReadonlyMap<string, Tool>): ToolCallBlock[][] => {
+  const groups: ToolCallBlock[][] = [];
+  let current: ToolCallBlock[] | undefined;
+  for (const call of calls) {
+    if (!runsInParallel(toolMap.get(call.name))) {
+      groups.push([call]);
+      current = undefined;
+    } else if (current && !current.some((other) => other.id === call.id)) {
+      current.push(call);
+    } else {
+      current = [call];
+      groups.push(current);
+    }
+  }
+  return groups;
+};
+
 /** What the model reads for a call after a terminal tool of the same response. */
 const AFTER_TERMINAL_TOOL_RESULT = "Not run: an earlier call of this response ended the turn.";
 
@@ -559,8 +588,12 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     extraBody,
     coalesce,
     maxToolResultChars,
+    maxParallelToolCalls = DEFAULT_MAX_PARALLEL_TOOL_CALLS,
     signal: externalSignal,
   } = options;
+  if (!Number.isInteger(maxParallelToolCalls) || maxParallelToolCalls < 1) {
+    throw new TypeError("nessi(): maxParallelToolCalls must be a positive integer.");
+  }
 
   const channel = createChannel<InboundEvent>();
   const deferredInbound: InboundEvent[] = [];
@@ -590,7 +623,10 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       if (startedAt !== undefined) timing.actionWaitMs += elapsedSince(startedAt);
     }
   };
+  // A parallel group records its wall time once instead of each call's time.
+  let parallelGroupRunning = false;
   const recordToolExecution = (startedAt: number, actionWaitMsAtStart: number) => {
+    if (parallelGroupRunning) return;
     const elapsedMs = elapsedSince(startedAt);
     const nestedActionWaitMs = Math.max(0, timing.actionWaitMs - actionWaitMsAtStart);
     timing.toolExecutionMs += Math.max(0, elapsedMs - nestedActionWaitMs);
@@ -714,8 +750,35 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     return applied;
   }
 
+  /** Stores the results of a parallel group in call order; see executeParallelToolCalls(). */
+  const resultWriters = new Map<string, (message: ToolResultMessage) => Promise<void>>();
+  const appendResult = (message: ToolResultMessage) => {
+    const write = resultWriters.get(message.callId);
+    return write ? write(message) : store.append(message);
+  };
+
+  // Parallel calls ask the app one question at a time: each nested approval or client-tool
+  // request holds this turn from its request until its answer.
+  // Resolves without a release when `deadline` aborts first; the loop's abort throws.
+  let actionTail: Promise<void> = Promise.resolve();
+  const takeActionTurn = async (deadline: AbortSignal): Promise<(() => void) | undefined> => {
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => { release = resolve; });
+    const previous = actionTail;
+    actionTail = previous.then(() => turn);
+    const stopped = new Promise<false>((resolve) => {
+      if (deadline.aborted) resolve(false);
+      else deadline.addEventListener("abort", () => resolve(false), { once: true });
+    });
+    const acquired = await Promise.race([previous.then(() => true), stopped]);
+    if (acquired && !deadline.aborted) return release;
+    release();
+    if (signal.aborted) throw new LoopAbortedError();
+    return undefined;
+  };
+
   const appendErrorResult = async (callId: string, name: string, result: unknown, reason: ToolResultReason | undefined) => {
-    await store.append({ role: "tool_result", callId, name, result, isError: true, ...(reason ? { reason } : {}) });
+    await appendResult({ role: "tool_result", callId, name, result, isError: true, ...(reason ? { reason } : {}) });
   };
 
   const deadlineError = () => new Error(signal.aborted ? "the loop was aborted" : "the tool deadline passed");
@@ -757,11 +820,11 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         callId: call.id,
         name: call.name,
       };
-      await store.append({ role: "tool_result", callId: call.id, name: call.name, result: output, isError: false });
+      await appendResult({ role: "tool_result", callId: call.id, name: call.name, result: output, isError: false });
       return issue;
     }
 
-    await store.append({
+    await appendResult({
       role: "tool_result",
       callId: call.id,
       name: call.name,
@@ -1051,22 +1114,28 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           const req = approvalQueue.shift()!;
           const matchesCustomApproval = (event: InboundEvent): event is Extract<InboundEvent, { type: "approval_response" }> =>
             event.type === "approval_response" && event.callId === req.id;
-          let actionWaitStartedAt: number | undefined;
-          if (!hasBufferedInbound(matchesCustomApproval)) {
-            actionWaitStartedAt = nowMs();
-            yield {
-              type: "tool_action_request",
-              ...eventFields,
-              kind: "custom_approval",
-              callId: req.id,
-              name: tc.name,
-              args: validatedInput,
-              message: req.message,
-            };
+          const releaseActionTurn = await takeActionTurn(toolAbort.signal);
+          let response: Extract<InboundEvent, { type: "approval_response" }> | undefined;
+          if (releaseActionTurn) try {
+            let actionWaitStartedAt: number | undefined;
+            if (!hasBufferedInbound(matchesCustomApproval)) {
+              actionWaitStartedAt = nowMs();
+              yield {
+                type: "tool_action_request",
+                ...eventFields,
+                kind: "custom_approval",
+                callId: req.id,
+                name: tc.name,
+                args: validatedInput,
+                message: req.message,
+              };
+            }
+            response = await waitForActionResponse(actionWaitStartedAt, () =>
+              pullWithinToolDeadline(matchesCustomApproval),
+            );
+          } finally {
+            releaseActionTurn();
           }
-          const response = await waitForActionResponse(actionWaitStartedAt, () =>
-            pullWithinToolDeadline(matchesCustomApproval),
-          );
           if (!response) {
             const issue = timeoutIssue();
             yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
@@ -1102,21 +1171,27 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
           const matchesClientResult = (event: InboundEvent): event is Extract<InboundEvent, { type: "tool_result" }> =>
             event.type === "tool_result" && event.callId === req.id;
-          let actionWaitStartedAt: number | undefined;
-          if (!hasBufferedInbound(matchesClientResult)) {
-            actionWaitStartedAt = nowMs();
-            yield {
-              type: "tool_action_request",
-              ...eventFields,
-              kind: "client_tool",
-              callId: req.id,
-              name: req.name,
-              args: requestArgs,
-            };
+          const releaseActionTurn = await takeActionTurn(toolAbort.signal);
+          let response: Extract<InboundEvent, { type: "tool_result" }> | undefined;
+          if (releaseActionTurn) try {
+            let actionWaitStartedAt: number | undefined;
+            if (!hasBufferedInbound(matchesClientResult)) {
+              actionWaitStartedAt = nowMs();
+              yield {
+                type: "tool_action_request",
+                ...eventFields,
+                kind: "client_tool",
+                callId: req.id,
+                name: req.name,
+                args: requestArgs,
+              };
+            }
+            response = await waitForActionResponse(actionWaitStartedAt, () =>
+              pullWithinToolDeadline(matchesClientResult),
+            );
+          } finally {
+            releaseActionTurn();
           }
-          const response = await waitForActionResponse(actionWaitStartedAt, () =>
-            pullWithinToolDeadline(matchesClientResult),
-          );
           if (!response) {
             const issue = timeoutIssue();
             yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
@@ -1175,6 +1250,69 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       signal.removeEventListener("abort", abortTool);
       if (resolveLoopAborted) signal.removeEventListener("abort", resolveLoopAborted);
     }
+  }
+
+  /**
+   * Runs a group of parallel calls, at most `maxParallelToolCalls` at a time, and passes on their
+   * events as they come. A call stores its result only after every earlier call of the group has
+   * finished, so the history keeps the call order and each end event still follows its stored
+   * result. After a call fails (for example on abort), no further call starts; the running ones
+   * finish, and the first failure is rethrown.
+   */
+  async function* executeParallelToolCalls(
+    calls: ToolCallBlock[],
+    toolSnapshot: ToolSnapshot,
+    turnCtx: TurnContext,
+    updateAggregateToolCall: UpdateAggregateToolCall,
+    turnIssues: { issues: LoopIssueAggregate[]; toolIssues: LoopToolIssueAggregate[] },
+  ): AsyncGenerator<OutboundEvent> {
+    type Step = { index: number } & ({ ok: true; result: IteratorResult<OutboundEvent> } | { ok: false; error: unknown });
+    const finished = calls.map(() => Promise.withResolvers<void>());
+    calls.forEach((call, index) => {
+      resultWriters.set(call.id, async (message) => {
+        if (index > 0) await finished[index - 1]!.promise;
+        await store.append(message);
+      });
+    });
+    const running = new Map<number, { events: AsyncGenerator<OutboundEvent>; step: Promise<Step> }>();
+    const advance = (index: number, events: AsyncGenerator<OutboundEvent>): Promise<Step> =>
+      events.next().then((result) => ({ index, ok: true, result }), (error: unknown) => ({ index, ok: false, error }));
+    let nextIndex = 0;
+    let failure: { error: unknown } | undefined;
+    const startCalls = () => {
+      while (!failure && running.size < maxParallelToolCalls && nextIndex < calls.length) {
+        const index = nextIndex++;
+        const events = executeToolCall(calls[index]!, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
+        running.set(index, { events, step: advance(index, events) });
+      }
+    };
+    const startedAt = nowMs();
+    const actionWaitMsAtStart = timing.actionWaitMs;
+    parallelGroupRunning = true;
+    try {
+      startCalls();
+      while (running.size > 0) {
+        const step = await Promise.race([...running.values()].map((entry) => entry.step));
+        const entry = running.get(step.index)!;
+        if (!step.ok || step.result.done) {
+          running.delete(step.index);
+          finished[step.index]!.resolve();
+          if (!step.ok) failure ??= { error: step.error };
+          startCalls();
+          continue;
+        }
+        yield step.result.value;
+        entry.step = advance(step.index, entry.events);
+      }
+    } finally {
+      // A consumer that stops early aborts the loop; the running calls then end on their own.
+      for (const { events, step } of running.values()) void step.then(() => events.return(undefined)).catch(() => {});
+      for (const call of calls) resultWriters.delete(call.id);
+      for (const call of finished) call.resolve();
+      parallelGroupRunning = false;
+      timing.toolExecutionMs += Math.max(0, elapsedSince(startedAt) - (timing.actionWaitMs - actionWaitMsAtStart));
+    }
+    if (failure) throw failure.error;
   }
 
   const noopAggregateUpdate: UpdateAggregateToolCall = () => {};
@@ -1267,16 +1405,21 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     };
     yield { type: "turn_start", agentId, loopId, ...turnCtx, resumed: true };
     try {
-      // Calls run one by one in order and store their results in that order, so of the calls
-      // without a result only the first can have been running when the run stopped. A server tool
-      // that needs no approval may have had its effect; it runs again only when marked safe.
+      // Calls run in order, one group at a time, and store their results in call order, so of the
+      // calls without a result only the first and the rest of its parallel group can have been
+      // running when the run stopped. A server tool that needs no approval may have had its
+      // effect; it runs again only when marked safe. A resumed loop runs its calls one by one.
       const [first] = pending;
-      const firstTool = first ? toolSnapshot.toolMap.get(first.name) : undefined;
-      if (first && firstTool?.kind === "server" && !firstTool.def.needsApproval && firstTool.def.replay !== "safe") {
-        pending.shift();
-        const issue = toolExecutionIssue("not_returned", NOT_RETURNED_TOOL_RESULT, first);
-        await appendErrorResult(first.id, first.name, issue.message, "not_returned");
-        updateAggregateToolCall(first.id, { result: issue.message, isError: true });
+      const startedGroup = first
+        ? groupToolCalls(toolCallBlocks, toolSnapshot.toolMap).find((group) => group.includes(first)) ?? [first]
+        : [];
+      for (const call of startedGroup.filter((block) => pending.includes(block))) {
+        const tool = toolSnapshot.toolMap.get(call.name);
+        if (tool?.kind !== "server" || tool.def.needsApproval || tool.def.replay === "safe") continue;
+        pending.splice(pending.indexOf(call), 1);
+        const issue = toolExecutionIssue("not_returned", NOT_RETURNED_TOOL_RESULT, call);
+        await appendErrorResult(call.id, call.name, issue.message, "not_returned");
+        updateAggregateToolCall(call.id, { result: issue.message, isError: true });
         recordIssue(issue, turnIssues);
         yield issueEvent(issue, turnCtx);
       }
@@ -1709,7 +1852,14 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
         let terminalToolCompleted = false;
         try {
-          for (const [index, tc] of (cutOff ? [] : toolCalls).entries()) {
+          let position = 0;
+          for (const group of groupToolCalls(cutOff ? [] : toolCalls, toolSnapshot.toolMap)) {
+            position += group.length;
+            if (group.length > 1) {
+              yield* executeParallelToolCalls(group, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
+              continue;
+            }
+            const tc = group[0]!;
             yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
             const aggregateToolCall = aggregateToolCallMap.get(tc.id);
             const isTerminalTool = Boolean(
@@ -1718,7 +1868,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             if (isTerminalTool && aggregateToolCall && !aggregateToolCall.isError) {
               terminalToolCompleted = true;
               // The calls after a terminal tool never run; their results keep a resume from running them.
-              yield* skipToolCalls(toolCalls.slice(index + 1), AFTER_TERMINAL_TOOL_RESULT);
+              yield* skipToolCalls(toolCalls.slice(position), AFTER_TERMINAL_TOOL_RESULT);
               break;
             }
           }
