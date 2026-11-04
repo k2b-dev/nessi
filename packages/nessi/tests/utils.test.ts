@@ -221,6 +221,20 @@ describe("closeUnansweredToolCalls", () => {
     expect(closed.slice(3)).toEqual(reused.slice(2));
   });
 
+  it("keeps looking for the result of a call whose ID a later response did not reuse", () => {
+    const resultB: Message = { role: "tool_result", callId: "b", name: "echo", result: "b" };
+    const resultA: Message = { role: "tool_result", callId: "a", name: "echo", result: "a" };
+    const closed = closeUnansweredToolCalls([user("go"), assistant(["a", "b"], "tool_use"), assistant(["a"], "tool_use"), resultB, resultA]);
+    expect(closed).toEqual([
+      user("go"),
+      assistant(["a", "b"], "tool_use"),
+      expect.objectContaining({ callId: "a", reason: "not_returned" }),
+      resultB,
+      assistant(["a"], "tool_use"),
+      resultA,
+    ]);
+  });
+
   it("leaves fully answered histories unchanged", () => {
     const messages: Message[] = [
       assistant(["a"]),

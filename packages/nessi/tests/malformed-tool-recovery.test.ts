@@ -200,6 +200,14 @@ describe("malformed tool recovery", () => {
     const provider = mockProviderMultiTurn(() => { requests++; return malformed(); });
     const events = await collect(nessi({ provider, store, systemPrompt: "test" }));
     expect(requests).toBe(1);
-    expect(events.find((event) => event.type === "loop_end")?.reason).toBe("error");
+    const end = events.find((event) => event.type === "loop_end");
+    expect(end?.reason).toBe("error");
+    // Stored malformed calls never count as executable calls, also when rebuilt from history.
+    expect(end?.type === "loop_end" ? end.aggregate.toolCallCount : undefined).toBe(0);
+
+    // A resume after the budget ran out does not ask the provider again.
+    const resumed = await collect(nessi({ provider, store, systemPrompt: "test" }));
+    expect(requests).toBe(1);
+    expect(resumed.find((event) => event.type === "loop_end")?.reason).toBe("error");
   });
 });

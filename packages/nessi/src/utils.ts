@@ -112,16 +112,21 @@ const openCallResult = (call: ToolCallBlock, stopReason: string | undefined): To
 
 /**
  * Where each call of the assistant message at `index` has its result: the first result for it
- * before the next user message, or before a later assistant message with a call of the same ID,
+ * before the next user message, and before a later assistant message with a call of the same ID,
  * since some providers reuse call IDs from turn to turn.
  */
 const resultsOf = (messages: Message[], index: number, ids: ReadonlySet<string>): Map<string, number> => {
   const found = new Map<string, number>();
-  for (let next = index + 1; next < messages.length && found.size < ids.size; next++) {
+  const open = new Set(ids);
+  for (let next = index + 1; next < messages.length && open.size > 0; next++) {
     const later = messages[next]!;
     if (later.role === "user") break;
-    if (later.role === "assistant" && later.content.some((block) => block.type === "tool_call" && ids.has(block.id))) break;
-    if (later.role === "tool_result" && ids.has(later.callId) && !found.has(later.callId)) found.set(later.callId, next);
+    if (later.role === "assistant") {
+      for (const block of later.content) if (block.type === "tool_call") open.delete(block.id);
+    } else if (later.role === "tool_result" && open.has(later.callId)) {
+      found.set(later.callId, next);
+      open.delete(later.callId);
+    }
   }
   return found;
 };

@@ -243,6 +243,15 @@ const runtimeIssue = (error: unknown): NessiIssue => ({
 
 const issueToToolResult = (issue: NessiIssue) => issue.message;
 
+/** Turns in a row that may retry malformed calls before the loop stops. */
+const MALFORMED_RECOVERY_ATTEMPTS = 2;
+
+const malformedRecoveryExhausted = (): NessiIssue => ({
+  kind: "runtime_error",
+  message: "Tool calls are still malformed after two recovery attempts. Stopping the loop.",
+  retryable: false,
+});
+
 const resultReason = (issue: NessiIssue): ToolResultReason | undefined =>
   issue.kind === "tool_execution_error" ? issue.reason : issue.kind === "timeout" ? "timeout" : undefined;
 
@@ -380,8 +389,9 @@ const aggregateTurnsFromEntries = (entries: StoreEntry[]): LoopTurnAggregate[] =
     const message = messages[i];
     if (message?.role !== "assistant") continue;
 
+    // Malformed calls stored for the model were never executable, as in the live aggregate.
     const toolCalls = message.content
-      .filter((block): block is ToolCallBlock => block.type === "tool_call")
+      .filter((block): block is ToolCallBlock => block.type === "tool_call" && !isMalformedCallId(block.id))
       .map((block): LoopToolCallAggregate => ({
         callId: block.id,
         name: block.name,
@@ -1303,6 +1313,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           consecutiveMalformedTurns = 0;
         }
 
+        // A resumed history that already spent its recovery budget gets no further request.
+        if (consecutiveMalformedTurns > MALFORMED_RECOVERY_ATTEMPTS) {
+          const issue = malformedRecoveryExhausted();
+          recordIssue(issue);
+          yield issueEvent(issue);
+          yield loopEndEvent("error");
+          return;
+        }
+
         if (providerTurn >= maxTurns) {
           yield loopEndEvent("max_turns");
           return;
@@ -1664,12 +1683,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
         let malformedRetriesExhausted = false;
         if (malformedIssues.length > 0 && !terminalToolCompleted) {
-          if (consecutiveMalformedTurns > 2) {
-            const issue: NessiIssue = {
-              kind: "runtime_error",
-              message: "Tool calls are still malformed after two recovery attempts. Stopping the loop.",
-              retryable: false,
-            };
+          if (consecutiveMalformedTurns > MALFORMED_RECOVERY_ATTEMPTS) {
+            const issue = malformedRecoveryExhausted();
             recordIssue(issue, turnIssues);
             yield issueEvent(issue, turnCtx);
             malformedRetriesExhausted = true;
