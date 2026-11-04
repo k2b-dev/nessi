@@ -90,6 +90,41 @@ describe("onTransport", () => {
     expect(reports[0]!.firstByteAt).toBeDefined();
   });
 
+  it("ends and reports a stalled error body on abort, also when the body ignores the signal", async () => {
+    const caller = new AbortController();
+    stubFetch(() => {
+      setTimeout(() => caller.abort(new Error("stop")), 10);
+      // The body never ends and is not tied to the request's signal.
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encoder.encode('{"error":')); } }), { status: 429 });
+    });
+    const started = Date.now();
+    const { reports, error } = await reportsOf(caller.signal);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(error).toMatchObject({ message: "stop" });
+    expect(reports).toEqual([expect.objectContaining({ status: 429, firstByteAt: expect.any(Number) })]);
+  });
+
+  it("reports the first byte of an error body", async () => {
+    stubFetch(() => new Response(JSON.stringify({ error: { message: "nope" } }), { status: 500 }));
+    const { reports } = await reportsOf();
+    expect(reports).toEqual([expect.objectContaining({ status: 500, firstByteAt: expect.any(Number) })]);
+  });
+
+  it("reports an abort at once while the consumer pauses between events", async () => {
+    const caller = new AbortController();
+    stubFetch(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Hi" } }] })}\n\n`)); },
+    }), { headers: { "Content-Type": "text/event-stream" } }));
+    const reports: TransportReport[] = [];
+    const events = endpoint("openai", { baseURL: "https://example.test" })
+      .stream({ messages: [], signal: caller.signal, onTransport: (report) => reports.push(report) })[Symbol.asyncIterator]();
+    await events.next();
+    caller.abort(new Error("stop"));
+    expect(reports).toHaveLength(1);
+    await events.return?.();
+    expect(reports).toHaveLength(1);
+  });
+
   it("ignores an error thrown by the hook", async () => {
     stubFetch(() => new Response(answer, { headers: { "Content-Type": "text/event-stream" } }));
     const result = await complete(endpoint("openai", { baseURL: "https://example.test" }), {
