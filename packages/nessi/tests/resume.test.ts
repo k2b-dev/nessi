@@ -110,6 +110,7 @@ describe("nessi resume of unresolved tool calls", () => {
       name: "dynamic_echo",
       description: "Echoes input",
       inputSchema: z.object({ text: z.string() }),
+      replay: "safe",
     }).server(async (input, ctx) => {
       receivedCallId = ctx.callId;
       return { echoed: input.text };
@@ -202,32 +203,51 @@ describe("nessi resume of unresolved tool calls", () => {
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "stop" });
   });
 
-  it("skips already-resolved calls and resumes only unresolved ones", async () => {
-    const store = await storeWithHistory([
-      { role: "user", content: [{ type: "text", text: "Run both" }] },
-      {
-        role: "assistant",
-        content: [
-          { type: "tool_call", id: "call-a", name: "echo", args: { text: "one" } },
-          { type: "tool_call", id: "call-b", name: "echo", args: { text: "two" } },
-        ],
-        stopReason: "tool_use",
-      },
-      { role: "tool_result", callId: "call-a", name: "echo", result: { echoed: "one" }, isError: false },
-    ]);
-    const provider = mockProvider([
-      { type: "text", delta: "Both done." },
-      { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "stop" },
-    ]);
+  const historyWithTwoCalls = () => [
+    { role: "user" as const, content: [{ type: "text" as const, text: "Run three" }] },
+    {
+      role: "assistant" as const,
+      content: [
+        { type: "tool_call" as const, id: "call-a", name: "echo", args: { text: "one" } },
+        { type: "tool_call" as const, id: "call-b", name: "echo", args: { text: "two" } },
+        { type: "tool_call" as const, id: "call-c", name: "echo", args: { text: "three" } },
+      ],
+      stopReason: "tool_use" as const,
+    },
+    { role: "tool_result" as const, callId: "call-a", name: "echo", result: { echoed: "one" }, isError: false },
+  ];
+  const doneProvider = () => mockProvider([
+    { type: "text", delta: "Done." },
+    { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "stop" },
+  ]);
 
-    const events = await collectEvents(nessi({ provider, store, systemPrompt: "sys", tools: [echoTool] }));
-    const toolEnds = events.filter((event) => event.type === "tool_execution_end");
-    expect(toolEnds).toHaveLength(1);
-    expect(toolEnds[0]).toMatchObject({ callId: "call-b" });
+  it("does not run again the call that was running when the run stopped, and runs the calls after it", async () => {
+    const store = await storeWithHistory(historyWithTwoCalls());
+    const ran: string[] = [];
+    const echo = defineTool({ name: "echo", description: "Echo", inputSchema: z.object({ text: z.string() }) })
+      .server(async ({ text }) => { ran.push(text); return { echoed: text }; });
 
-    const entries = await store.load();
-    const results = entries.filter((entry) => entry.message.role === "tool_result");
-    expect(results).toHaveLength(2);
+    const events = await collectEvents(nessi({ provider: doneProvider(), store, systemPrompt: "sys", tools: [echo] }));
+
+    // Calls run in order, so only call-b can have been running; call-c never started.
+    expect(ran).toEqual(["three"]);
+    const results = (await store.load()).flatMap(({ message }) => (message.role === "tool_result" ? [message] : []));
+    expect(results.map((result) => [result.callId, result.reason])).toEqual([["call-a", undefined], ["call-b", "not_returned"], ["call-c", undefined]]);
+    expect(events.some((event) => event.type === "issue" && event.issue.kind === "tool_execution_error" && event.issue.reason === "not_returned")).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "stop" });
+  });
+
+  it("runs the interrupted call again when its tool is marked safe to replay", async () => {
+    const store = await storeWithHistory(historyWithTwoCalls());
+    const ran: string[] = [];
+    const echo = defineTool({ name: "echo", description: "Echo", inputSchema: z.object({ text: z.string() }), replay: "safe" })
+      .server(async ({ text }) => { ran.push(text); return { echoed: text }; });
+
+    await collectEvents(nessi({ provider: doneProvider(), store, systemPrompt: "sys", tools: [echo] }));
+
+    expect(ran).toEqual(["two", "three"]);
+    const results = (await store.load()).filter(({ message }) => message.role === "tool_result");
+    expect(results).toHaveLength(3);
   });
 
   it("emits a fresh tool_action_request when the resume has no seeded response", async () => {

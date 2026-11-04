@@ -173,7 +173,7 @@ describe("toErrorMessage", () => {
 });
 
 describe("closeUnansweredToolCalls", () => {
-  const assistant = (ids: string[], stopReason?: "tool_use" | "error" | "interrupted"): Message => ({
+  const assistant = (ids: string[], stopReason?: "tool_use" | "error" | "interrupted" | "max_tokens"): Message => ({
     role: "assistant",
     content: ids.map((id) => ({ type: "tool_call" as const, id, name: "echo", args: {} })),
     ...(stopReason ? { stopReason } : {}),
@@ -195,7 +195,7 @@ describe("closeUnansweredToolCalls", () => {
     expect(messages).toHaveLength(4);
   });
 
-  for (const stopReason of ["error", "interrupted"] as const) {
+  for (const stopReason of ["error", "interrupted", "max_tokens"] as const) {
     it(`answers the calls of a response that ended with "${stopReason}" as not run`, () => {
       const closed = closeUnansweredToolCalls([user("go"), assistant(["a"], stopReason), user("next")]);
       expect(closed[2]).toEqual({ role: "tool_result", callId: "a", name: "echo", result: NOT_RUN_TOOL_RESULT, isError: true, reason: "not_run" });

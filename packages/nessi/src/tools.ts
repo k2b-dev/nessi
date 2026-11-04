@@ -16,6 +16,7 @@ export const defineTool = <TInput extends z.ZodType, TOutput extends z.ZodType =
   outputSchema?: TOutput;
   needsApproval?: boolean;
   timeoutMs?: number | false;
+  replay?: "safe" | "unsafe";
   toHistoricalResult?: (context: {
     input: z.infer<TInput>;
     output: z.infer<TOutput>;

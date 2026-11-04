@@ -210,4 +210,61 @@ describe("malformed tool recovery", () => {
     expect(requests).toBe(1);
     expect(resumed.find((event) => event.type === "loop_end")?.reason).toBe("error");
   });
+
+  it("does not run the calls of a response cut off at the output limit and lets the model retry", async () => {
+    const requests: ProviderRequest[] = [];
+    const executed: string[] = [];
+    const echo = defineTool({ name: "echo", description: "Echo", inputSchema: z.object({ text: z.string() }) })
+      .server(async ({ text }) => { executed.push(text); return text; });
+    const provider = mockProviderMultiTurn((request, index) => {
+      requests.push(request);
+      if (index === 0) return [
+        { type: "tool_call", callId: "cut", name: "echo", args: { text: "first" } },
+        { type: "usage", usage: { input: 10, output: 3, total: 13 }, finishReason: "max_tokens" },
+      ];
+      if (index === 1) return [
+        { type: "tool_call", callId: "ok", name: "echo", args: { text: "again" } },
+        { type: "usage", usage: { input: 10, output: 3, total: 13 }, finishReason: "tool_use" },
+      ];
+      return answer;
+    });
+    const store = memoryStore();
+    const events = await collect(nessi({ provider, store, systemPrompt: "test", input: "Echo", tools: [echo] }));
+
+    expect(executed).toEqual(["again"]);
+    expect(requests[1]?.messages.at(-1)).toMatchObject({ role: "tool_result", callId: "cut", isError: true, reason: "not_run" });
+    expect(JSON.stringify(requests[1]?.messages.at(-1))).toContain("output token limit");
+    expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+    expect(events.find((event) => event.type === "loop_end")?.reason).toBe("stop");
+  });
+
+  it("bounds responses that keep getting cut off with calls", async () => {
+    let requests = 0;
+    const echo = defineTool({ name: "echo", description: "Echo", inputSchema: z.object({ text: z.string() }) })
+      .server(async ({ text }) => text);
+    const provider = mockProviderMultiTurn(() => {
+      requests++;
+      return [
+        { type: "tool_call", callId: `cut-${requests}`, name: "echo", args: { text: "x" } },
+        { type: "usage", usage: { input: 10, output: 3, total: 13 }, finishReason: "max_tokens" },
+      ];
+    });
+    const events = await collect(nessi({ provider, store: memoryStore(), systemPrompt: "test", input: "Echo", tools: [echo] }));
+    expect(requests).toBe(3);
+    expect(events.find((event) => event.type === "loop_end")?.reason).toBe("error");
+  });
+
+  it("does not run the calls of a stored cut-off response on resume", async () => {
+    let executed = 0;
+    const echo = defineTool({ name: "echo", description: "Echo", inputSchema: z.object({}), replay: "safe" })
+      .server(async () => { executed++; return "ran"; });
+    const store = memoryStore();
+    await store.append({ role: "user", content: [{ type: "text", text: "Echo" }] });
+    await store.append({ role: "assistant", content: [{ type: "tool_call", id: "cut", name: "echo", args: {} }], stopReason: "max_tokens" });
+    const requests: ProviderRequest[] = [];
+    const provider = mockProviderMultiTurn((request) => { requests.push(request); return answer; });
+    await collect(nessi({ provider, store, systemPrompt: "test", tools: [echo] }));
+    expect(executed).toBe(0);
+    expect(requests[0]?.messages.at(-1)).toMatchObject({ role: "tool_result", callId: "cut", reason: "not_run" });
+  });
 });
