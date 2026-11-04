@@ -2,7 +2,9 @@ import { describe, it, expect } from "bun:test";
 import {
   closeUnansweredToolCalls,
   estimateTokens,
-  INTERRUPTED_TOOL_RESULT,
+  newMalformedCallId,
+  NOT_RETURNED_TOOL_RESULT,
+  NOT_RUN_TOOL_RESULT,
   projectHistoricalToolResults,
   zeroUsage,
   toErrorMessage,
@@ -171,24 +173,52 @@ describe("toErrorMessage", () => {
 });
 
 describe("closeUnansweredToolCalls", () => {
-  const assistant = (ids: string[]): Message => ({
+  const assistant = (ids: string[], stopReason?: "tool_use" | "error" | "interrupted"): Message => ({
     role: "assistant",
     content: ids.map((id) => ({ type: "tool_call" as const, id, name: "echo", args: {} })),
+    ...(stopReason ? { stopReason } : {}),
   });
+  const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }] });
 
-  it("adds error results for unanswered calls after the existing results", () => {
+  it("answers an open call as not returned, next to its call", () => {
     const messages: Message[] = [
-      { role: "user", content: [{ type: "text", text: "go" }] },
-      assistant(["a", "b"]),
+      user("go"),
+      assistant(["a", "b"], "tool_use"),
       { role: "tool_result", callId: "a", name: "echo", result: "ok" },
-      { role: "user", content: [{ type: "text", text: "next" }] },
+      user("next"),
     ];
 
     const closed = closeUnansweredToolCalls(messages);
 
     expect(closed.map((message) => message.role)).toEqual(["user", "assistant", "tool_result", "tool_result", "user"]);
-    expect(closed[3]).toEqual({ role: "tool_result", callId: "b", name: "echo", result: INTERRUPTED_TOOL_RESULT, isError: true });
+    expect(closed).toContainEqual({ role: "tool_result", callId: "b", name: "echo", result: NOT_RETURNED_TOOL_RESULT, isError: true, reason: "not_returned" });
     expect(messages).toHaveLength(4);
+  });
+
+  for (const stopReason of ["error", "interrupted"] as const) {
+    it(`answers the calls of a response that ended with "${stopReason}" as not run`, () => {
+      const closed = closeUnansweredToolCalls([user("go"), assistant(["a"], stopReason), user("next")]);
+      expect(closed[2]).toEqual({ role: "tool_result", callId: "a", name: "echo", result: NOT_RUN_TOOL_RESULT, isError: true, reason: "not_run" });
+    });
+  }
+
+  it("answers a stored malformed call as malformed", () => {
+    const id = newMalformedCallId();
+    const closed = closeUnansweredToolCalls([user("go"), assistant([id], "tool_use")]);
+    expect(closed[2]).toMatchObject({ role: "tool_result", callId: id, isError: true, reason: "malformed_tool_call" });
+  });
+
+  it("moves a result stored after a later response up to its call", () => {
+    const late: Message = { role: "tool_result", callId: "a", name: "echo", result: "late" };
+    const messages: Message[] = [user("go"), assistant(["a"], "tool_use"), { role: "assistant", content: [{ type: "text", text: "meanwhile" }] }, late];
+    expect(closeUnansweredToolCalls(messages)).toEqual([user("go"), assistant(["a"], "tool_use"), late, messages[2]!]);
+  });
+
+  it("does not take a result across a user message or a later call with the same ID", () => {
+    const reused: Message[] = [user("go"), assistant(["a"], "tool_use"), user("again"), assistant(["a"], "tool_use"), { role: "tool_result", callId: "a", name: "echo", result: "second" }];
+    const closed = closeUnansweredToolCalls(reused);
+    expect(closed[2]).toMatchObject({ callId: "a", reason: "not_returned" });
+    expect(closed.slice(3)).toEqual(reused.slice(2));
   });
 
   it("leaves fully answered histories unchanged", () => {
@@ -196,7 +226,7 @@ describe("closeUnansweredToolCalls", () => {
       assistant(["a"]),
       { role: "tool_result", callId: "a", name: "echo", result: "ok" },
     ];
-    expect(closeUnansweredToolCalls(messages)).toEqual(messages);
+    expect(closeUnansweredToolCalls(messages)).toBe(messages);
   });
 });
 

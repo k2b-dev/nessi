@@ -65,7 +65,21 @@ export type ToolResultMessage = {
   result: unknown;
   historicalResult?: HistoricalToolResult;
   isError?: boolean;
+  /** Set on every error result nessi writes itself; code can rely on it, unlike the `result` text. */
+  reason?: ToolResultReason;
 };
+
+/**
+ * Why nessi answered a call with an error. `malformed_tool_call`: the provider sent a call nessi
+ * could not use. `not_run`: the response ended before its calls could run. `not_returned`: the
+ * call may have run, but no result was stored. The rest name the failure of a call that ran.
+ */
+export type ToolResultReason =
+  | ToolExecutionIssue["reason"]
+  | "timeout"
+  | "malformed_tool_call"
+  | "not_run"
+  | "not_returned";
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 

@@ -146,11 +146,16 @@ Top-level client tools validate pushed results against their `outputSchema`.
 Nested `ctx.requestClientTool()` calls also validate args and output when the
 requested client tool name is registered in `tools`.
 
-Root `nessi()` loops recover from `malformed_tool_call` by appending a corrective
-user message to the session history and giving the model another turn. The
-message asks for valid JSON and smaller arguments; valid calls from the same
-turn still execute before the correction. No tool result is invented for a
-call that never became executable.
+Root `nessi()` loops recover from `malformed_tool_call` by storing the malformed
+call as a `tool_call` (ID `malformed_…`, empty args) with an error result
+(`reason: "malformed_tool_call"`) and giving the model another turn. The result
+asks for valid JSON and smaller arguments; valid calls from the same turn still
+execute. The malformed call never executes, not even on resume.
+
+Every error result nessi writes carries a fixed `reason`: `malformed_tool_call`,
+`unknown_tool`, `input_validation_failed`, `output_validation_failed`,
+`execution_failed`, `approval_denied`, `timeout`, `not_run` or `not_returned`.
+Match on `reason`, never on the result text.
 
 Recovery permits two retries after consecutive malformed turns, within
 `maxTurns`. A turn without malformed calls resets the recovery limit. If both

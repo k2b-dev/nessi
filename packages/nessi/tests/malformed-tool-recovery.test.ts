@@ -6,6 +6,7 @@ import { defineTool } from "../src/tools.js";
 import type { OutboundEvent, ProviderRequest } from "../src/types.js";
 import type { RawStreamEvent } from "../src/ai/types.js";
 import { mockProviderMultiTurn } from "./mock-provider.js";
+import { newMalformedCallId } from "../src/utils.js";
 
 const malformed = (): RawStreamEvent[] => [
   { type: "text", delta: "Now I will echo the text." },
@@ -45,13 +46,17 @@ describe("malformed tool recovery", () => {
     const events = await collect(nessi({ provider, store, systemPrompt: "test", input: "Echo", tools: [echo] }));
 
     expect(requests).toHaveLength(3);
-    expect(requests[1]?.messages.at(-1)).toMatchObject({ role: "user" });
-    const feedback = requests[1]?.messages.at(-1);
-    expect(JSON.stringify(feedback)).toContain('echo');
+    // The malformed call reaches the model as its own call, answered with an error.
+    const [call, feedback] = requests[1]!.messages.slice(-2);
+    expect(call).toMatchObject({ role: "assistant", content: [{ type: "text" }, { type: "tool_call", name: "echo", args: {} }] });
+    const callId = call?.role === "assistant" ? call.content.find((block) => block.type === "tool_call")?.id : undefined;
+    expect(callId).toMatch(/^malformed_[0-9a-f]{24}$/);
+    expect(feedback).toMatchObject({ role: "tool_result", callId, name: "echo", isError: true, reason: "malformed_tool_call" });
     expect(JSON.stringify(feedback)).toContain("malformed JSON");
     expect(JSON.stringify(feedback)).toContain("smaller");
     expect(JSON.stringify(feedback)).not.toContain("unfinished");
     expect(executed).toEqual(["smaller"]);
+    expect((await store.load()).filter(({ message }) => message.role === "user")).toHaveLength(1);
     expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
     expect(events.some((event) => event.type === "block_start" && event.callId === "bad")).toBe(false);
     expect((await store.load()).some(({ message }) => message.role === "tool_result" && message.callId === "bad")).toBe(false);
@@ -95,8 +100,9 @@ describe("malformed tool recovery", () => {
     });
     const events = await collect(nessi({ provider, store: memoryStore(), systemPrompt: "test", input: "Echo", tools: [echo] }));
     expect(executed).toBe(1);
-    expect(requests[1]?.messages.at(-2)).toMatchObject({ role: "tool_result", callId: "good", result: "valid" });
-    expect(requests[1]?.messages.at(-1)?.role).toBe("user");
+    // The malformed call's result is stored at once; the valid call's result follows when it returns.
+    expect(requests[1]?.messages.at(-2)).toMatchObject({ role: "tool_result", reason: "malformed_tool_call" });
+    expect(requests[1]?.messages.at(-1)).toMatchObject({ role: "tool_result", callId: "good", result: "valid" });
     expect(events.find((event) => event.type === "loop_end")?.reason).toBe("stop");
   });
 
@@ -123,6 +129,8 @@ describe("malformed tool recovery", () => {
     });
     const events = await collect(nessi({ provider, store: memoryStore(), systemPrompt: "test", input: "Echo" }));
     expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages.at(-2)).toMatchObject({ role: "assistant", content: [{ type: "tool_call", name: "unknown_tool" }] });
+    expect(requests[1]?.messages.at(-1)).toMatchObject({ role: "tool_result", name: "unknown_tool", reason: "malformed_tool_call" });
     expect(JSON.stringify(requests[1]?.messages.at(-1))).toContain("Missing tool name");
     expect(events.find((event) => event.type === "loop_end")?.reason).toBe("stop");
   });
@@ -161,5 +169,37 @@ describe("malformed tool recovery", () => {
     expect(requests).toBe(1);
     expect(events.find((event) => event.type === "loop_end")?.reason).toBe("aborted");
     expect((await store.load()).filter(({ message }) => message.role === "user")).toHaveLength(1);
+  });
+
+  it("answers a stored malformed call on resume instead of executing it", async () => {
+    let executed = 0;
+    const echo = defineTool({ name: "echo", description: "Echo", inputSchema: z.object({}) })
+      .server(async () => { executed++; return "ran"; });
+    const store = memoryStore();
+    const id = "malformed_0123456789abcdef01234567";
+    await store.append({ role: "user", content: [{ type: "text", text: "Echo" }] });
+    // The run stopped after storing the response and before the call's error result.
+    await store.append({ role: "assistant", content: [{ type: "tool_call", id, name: "echo", args: {} }], stopReason: "tool_use" });
+    const requests: ProviderRequest[] = [];
+    const provider = mockProviderMultiTurn((request) => { requests.push(request); return answer; });
+    await collect(nessi({ provider, store, systemPrompt: "test", tools: [echo] }));
+    expect(executed).toBe(0);
+    expect(requests[0]?.messages.at(-1)).toMatchObject({ role: "tool_result", callId: id, isError: true, reason: "malformed_tool_call" });
+    expect((await store.load()).filter(({ message }) => message.role === "tool_result")).toHaveLength(1);
+  });
+
+  it("goes on with the recovery budget a resumed history already spent", async () => {
+    const store = memoryStore();
+    await store.append({ role: "user", content: [{ type: "text", text: "Echo" }] });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const id = newMalformedCallId();
+      await store.append({ role: "assistant", content: [{ type: "tool_call", id, name: "echo", args: {} }], stopReason: "tool_use" });
+      await store.append({ role: "tool_result", callId: id, name: "echo", result: "bad", isError: true, reason: "malformed_tool_call" });
+    }
+    let requests = 0;
+    const provider = mockProviderMultiTurn(() => { requests++; return malformed(); });
+    const events = await collect(nessi({ provider, store, systemPrompt: "test" }));
+    expect(requests).toBe(1);
+    expect(events.find((event) => event.type === "loop_end")?.reason).toBe("error");
   });
 });

@@ -49,6 +49,7 @@ export type {
   ToolExecutionIssue,
   ToolHistoricalResultIssue,
   ToolResultMessage,
+  ToolResultReason,
   ToolStreamIssue,
   ToolStreamIssueKind,
   ToolStreamIssueReason,
@@ -227,7 +228,7 @@ export type NessiOptions = {
    * store history: a trailing user message acts as the prompt, and unresolved tool_call
    * blocks on the trailing assistant message are resumed (executed or re-requested)
    * before the next provider turn. Calls from an aborted (`"interrupted"`) or provider-stopped
-   * (`"error"`) message are not resumed; they reach the provider as interrupted calls. Push matching approval_response / tool_result events
+   * (`"error"`) message are not resumed; the provider reads them as not run (`reason: "not_run"`). Push matching approval_response / tool_result events
    * before iterating to seed a resumed loop.
    */
   input?: Input;

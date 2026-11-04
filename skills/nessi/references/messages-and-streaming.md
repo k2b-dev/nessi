@@ -285,7 +285,8 @@ tool calls stay unanswered in the store. A later loop without `input` resumes
 calls of a completed answer, for example one waiting for approval, but never
 calls from an answer that was aborted while being generated
 (`stopReason: "interrupted"`). Those, and any call before new `input`, reach the
-provider as interrupted error results. A `compact` function receives the loop signal as `ctx.signal`.
+provider as error results with `reason` `"not_run"` (the answer ended before its
+calls could run) or `"not_returned"` (the call may have run). A `compact` function receives the loop signal as `ctx.signal`.
 
 Use `reasoningEffort` to control reasoning: `"none"` for simple calls where reasoning would spend the output budget, or a level such as `"low"` or `"high"`. The value passes through unchanged and works on provider defaults, single calls and root loops; a call value wins. `extraBody` adds request fields Nessi does not model. Root `nessi()` accepts the same generation controls:
 

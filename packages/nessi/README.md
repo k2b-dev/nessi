@@ -77,10 +77,25 @@ loop ends with `"error"`. The final `loop_end` event includes `aggregate`, which
 ## Malformed tool calls
 
 When a provider emits malformed tool arguments, `nessi()` reports a
-`malformed_tool_call` issue, adds a corrective user message to the session
-history, and gives the model another turn to retry with smaller, valid JSON
-arguments. The malformed call is never executed. Valid calls from the same
-response still run, and their results precede the correction.
+`malformed_tool_call` issue and gives the model another turn to retry with
+smaller, valid JSON arguments. The stored response gets the malformed call as a
+`tool_call` with an ID that starts with `malformed_` and empty arguments, and the
+call gets an error result with `reason: "malformed_tool_call"` that explains
+what went wrong. The malformed call is never executed, not even by a resume.
+Valid calls from the same response still run.
+
+Every error result nessi writes itself carries a fixed `reason`, so code can
+tell them apart without comparing text: `malformed_tool_call`, `unknown_tool`,
+`input_validation_failed`, `output_validation_failed`, `execution_failed`,
+`approval_denied`, `timeout`, and, for calls without a stored result,
+`not_run` or `not_returned`.
+
+A call can stay without a result, for example after an abort or a crash. The
+store keeps it that way, and every provider request answers it with an error
+result: `not_run` when its response ended before calls could run (`stopReason`
+`"error"` or `"interrupted"`), otherwise `not_returned`, which tells the model
+the call may have run. A result stored after a later message, such as one a
+client pushed late, moves up to its call in the request.
 
 Recovery allows two retries after consecutive malformed turns, subject to
 `maxTurns`. A turn without malformed calls resets this limit. If both retries
