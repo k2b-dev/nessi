@@ -49,6 +49,19 @@ const parseFrame = (frame: string): SSEEvent | null => {
   return { event, data: dataLines.join("\n"), id };
 };
 
+/**
+ * Largest single stream record nessi buffers. Provider records carry deltas or one chunk of an
+ * answer, far below this; the budget only stops a broken or hostile stream from growing memory.
+ */
+export const MAX_STREAM_RECORD_CHARS = 8 * 1024 * 1024;
+
+export class StreamRecordTooLargeError extends Error {
+  constructor() {
+    super(`Stream record exceeds ${MAX_STREAM_RECORD_CHARS} characters.`);
+    this.name = "StreamRecordTooLargeError";
+  }
+}
+
 const readWithTimeout = async (
   reader: ByteStreamReader,
   scope: SSETimeoutScope,
@@ -56,29 +69,76 @@ const readWithTimeout = async (
 ) => {
   if (!timeoutMs || timeoutMs <= 0) return reader.read();
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timedOut: SSETimeoutError | undefined;
   try {
-    return await Promise.race([
+    const result = await Promise.race([
       reader.read(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          const error = new SSETimeoutError(scope, timeoutMs);
-          void reader.cancel?.(error).catch(() => {});
-          reject(error);
+          timedOut = new SSETimeoutError(scope, timeoutMs);
+          // Reject before cancelling: cancelling resolves the pending read as a clean end.
+          reject(timedOut);
+          void reader.cancel?.(timedOut).catch(() => {});
         }, timeoutMs);
       }),
     ]);
+    if (timedOut) throw timedOut;
+    return result;
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
+};
 
-export const parseSSE = async function* (
+/**
+ * Splits a byte stream into records at `separator`. Each chunk is scanned once and kept as a
+ * fragment until its record ends, so fragmented large records cost linear time. CRLF line
+ * endings become LF first. The first read uses `firstByteMs`, later reads `idleMs`. Yields the
+ * records completed by each read as one batch.
+ */
+export const readRecordBatches = async function* (
   reader: ByteStreamReader,
+  separator: string,
   timeouts: SSETimeouts = {},
-): AsyncGenerator<SSEEvent> {
+): AsyncGenerator<string[]> {
   const decoder = new TextDecoder();
-  let buffer = "";
+  const tailLength = separator.length - 1;
+  let fragments: string[] = [];
+  let pendingLength = 0;
+  // The last characters of the pending record, where a separator split across chunks begins.
+  let tail = "";
+  let carriedCR = false;
   let readCount = 0;
+
+  const normalize = (text: string) => {
+    if (carriedCR) text = `\r${text}`;
+    carriedCR = text.endsWith("\r");
+    if (carriedCR) text = text.slice(0, -1);
+    return text.replace(/\r\n/g, "\n");
+  };
+
+  const split = (text: string): string[] => {
+    const scan = tail + text;
+    let start = 0;
+    let end = scan.indexOf(separator);
+    if (end < 0) {
+      fragments.push(text);
+      pendingLength += text.length;
+      tail = tailLength > 0 ? scan.slice(-tailLength) : "";
+      return [];
+    }
+    // The first record ends here; its start is in the fragments, of which `tail` is the end.
+    const records = [fragments.join("").slice(0, pendingLength - tail.length) + scan.slice(0, end)];
+    start = end + separator.length;
+    while ((end = scan.indexOf(separator, start)) >= 0) {
+      records.push(scan.slice(start, end));
+      start = end + separator.length;
+    }
+    const rest = scan.slice(start);
+    fragments = rest ? [rest] : [];
+    pendingLength = rest.length;
+    tail = tailLength > 0 ? rest.slice(-tailLength) : "";
+    return records;
+  };
 
   while (true) {
     const scope = readCount === 0 ? "provider_first_byte" : "provider_idle";
@@ -86,19 +146,25 @@ export const parseSSE = async function* (
     const { done, value } = await readWithTimeout(reader, scope, timeoutMs);
     readCount++;
     if (done) break;
+    const records = split(normalize(decoder.decode(value, { stream: true })));
+    if (records.length > 0) yield records;
+    if (pendingLength > MAX_STREAM_RECORD_CHARS) throw new StreamRecordTooLargeError();
+  }
 
-    buffer += decoder.decode(value, { stream: true });
-    const normalized = buffer.replace(/\r\n/g, "\n");
-    const frames = normalized.split("\n\n");
-    buffer = frames.pop() ?? "";
+  const records = split(normalize(decoder.decode()));
+  const rest = fragments.join("") + (carriedCR ? "\r" : "");
+  if (rest) records.push(rest);
+  if (records.length > 0) yield records;
+};
 
+export const parseSSE = async function* (
+  reader: ByteStreamReader,
+  timeouts: SSETimeouts = {},
+): AsyncGenerator<SSEEvent> {
+  for await (const frames of readRecordBatches(reader, "\n\n", timeouts)) {
     for (const frame of frames) {
       const parsed = parseFrame(frame);
       if (parsed) yield parsed;
     }
   }
-
-  const finalFrame = buffer.replace(/\r\n/g, "\n");
-  const parsed = parseFrame(finalFrame);
-  if (parsed) yield parsed;
 };
