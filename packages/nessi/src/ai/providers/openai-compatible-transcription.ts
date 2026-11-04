@@ -41,6 +41,7 @@ export const openAICompatibleTranscription = (
         method: "POST",
         headers,
         body,
+        redirect: "error",
         signal: request.signal,
       }).catch((error: unknown) => {
         request.signal?.throwIfAborted();

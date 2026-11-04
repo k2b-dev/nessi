@@ -292,7 +292,7 @@ values disable the corresponding timeout.
 
 When upgrading from 0.17.1, add `totalMs` to retain a deadline for native
 `complete()` calls. Without it, waiting for native response headers has no
-provider timeout. A native timeout rejects with an `Error` carrying
+provider timeout. A native timeout rejects with a `ProviderError` carrying
 `kind: "timeout"`, `scope: "provider_total"` or `"provider_idle"`, and
 `retryable: true`. Pass a request `signal` for caller-controlled cancellation;
 its reason is preserved. These options apply to chat providers, not the

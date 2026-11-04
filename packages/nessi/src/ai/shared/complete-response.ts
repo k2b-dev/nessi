@@ -1,8 +1,11 @@
 import type { ProviderTimeouts } from "../types.js";
-import { formatConnectionError } from "./errors.js";
+import { normalizeConnectionError, ProviderError, providerError } from "./errors.js";
 import type { ByteStreamReader } from "./sse.js";
 
-/** Buffer a native response with a total deadline and idle limits after headers. */
+/**
+ * Buffer a native response with a total deadline and idle limits after headers.
+ * Redirects fail: credential headers such as x-api-key would follow them to another origin.
+ */
 export const fetchCompleteResponse = async (
   url: string,
   init: RequestInit,
@@ -24,8 +27,8 @@ export const fetchCompleteResponse = async (
   const scheduleTimeout = (scope: "provider_total" | "provider_idle", timeoutMs?: number) => {
     if (!timeoutMs || timeoutMs <= 0) return;
     return setTimeout(() => {
-      controller.abort(Object.assign(
-        new Error(`${label} response ${scope === "provider_total" ? "total" : "idle"} timeout after ${timeoutMs}ms.`),
+      controller.abort(new ProviderError(
+        `${label} response ${scope === "provider_total" ? "total" : "idle"} timeout after ${timeoutMs}ms.`,
         { kind: "timeout", scope, retryable: true },
       ));
     }, timeoutMs);
@@ -34,7 +37,7 @@ export const fetchCompleteResponse = async (
   try {
     totalTimeout = scheduleTimeout("provider_total", timeouts?.totalMs);
     const response = await Promise.race([
-      fetch(url, { ...init, signal: controller.signal }).then((response) => {
+      fetch(url, { ...init, redirect: "error", signal: controller.signal }).then((response) => {
         // A response can arrive just after an abort, including with custom fetch implementations.
         if (controller.signal.aborted) {
           void response.body?.cancel(controller.signal.reason).catch(() => {});
@@ -43,12 +46,15 @@ export const fetchCompleteResponse = async (
         return response;
       }).catch((error: unknown) => {
         if (controller.signal.aborted) throw controller.signal.reason;
-        throw new Error(formatConnectionError(label, error));
+        throw providerError(normalizeConnectionError(label, error), { cause: error });
       }),
       aborted,
     ]);
     reader = response.body?.getReader();
-    if (!reader) return response;
+    if (!reader) {
+      signal?.throwIfAborted();
+      return response;
+    }
 
     const decoder = new TextDecoder();
     let text = "";
@@ -60,11 +66,16 @@ export const fetchCompleteResponse = async (
       text += decoder.decode(value, { stream: true });
     }
     text += decoder.decode();
+    // The last read can win the race against an abort that already happened.
+    signal?.throwIfAborted();
     return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
   } catch (error) {
     controller.abort(error);
     void reader?.cancel?.(error).catch(() => {});
-    throw error;
+    if (signal?.aborted) throw signal.reason;
+    if (error instanceof ProviderError) throw error;
+    // The connection failed while the body was read.
+    throw providerError(normalizeConnectionError(label, error), { cause: error });
   } finally {
     clearTimeout(totalTimeout);
     clearTimeout(idleTimeout);

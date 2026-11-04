@@ -1,10 +1,10 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toOllamaTools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
@@ -35,7 +35,8 @@ type OllamaResponse = {
     role?: string;
     content?: string;
     thinking?: string;
-    tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
+    /** Usually an object; validated before a call becomes executable. */
+    tool_calls?: Array<{ function: { name: string; arguments?: unknown } }>;
   };
   done: boolean;
   done_reason?: string;
@@ -107,12 +108,12 @@ const usageFromResponse = (response: OllamaResponse, options?: OllamaOptions) =>
   );
 
 const toolCallsFromResponse = (response: OllamaResponse, idPrefix = fallbackToolCallPrefix("ollama")): ToolCallBlock[] =>
-  (response.message?.tool_calls ?? []).map((toolCall, index) => ({
-    type: "tool_call",
-    id: `${idPrefix}-${index}`,
-    name: toolCall.function.name,
-    args: toolCall.function.arguments,
-  }));
+  (response.message?.tool_calls ?? []).map((toolCall, index) => {
+    const { name } = toolCall.function;
+    const args = parseToolArguments(toolCall.function.arguments);
+    if (!args) throw malformedToolArgumentsError("ollama", name);
+    return { type: "tool_call", id: `${idPrefix}-${index}`, name, args };
+  });
 
 const generationOptions = (request: GenerateRequest, options?: OllamaOptions) => {
   const result: Record<string, unknown> = {};
@@ -160,7 +161,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt),
+        messages: buildRequest("ollama", () => convertMessages(request.messages, request.systemPrompt)),
         stream: false,
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
@@ -172,17 +173,17 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const response = await fetchCompleteResponse(`${baseURL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("ollama", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "ollama", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("ollama", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<OllamaResponse>(await response.text());
-      if (!payload) throw new Error("ollama returned invalid JSON.");
+      if (!payload) throw invalidResponseError("ollama");
       const usage = usageFromResponse(payload, options);
       const toolCalls = toolCallsFromResponse(payload);
       const finishReason = finishReasonFrom(payload, toolCalls.length > 0);
@@ -207,7 +208,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt),
+        messages: buildRequest("ollama", () => convertMessages(request.messages, request.systemPrompt)),
         stream: true,
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
@@ -217,6 +218,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       applyThink(body, request, options);
 
       let response: Response;
+      const serializedBody = serializeRequest("ollama", withExtraBody(body, request, options));
       const controller = new AbortController();
       const abortExternal = () => controller.abort(request.signal?.reason);
       const cleanupExternalAbort = () => {
@@ -235,17 +237,20 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           fetch(`${baseURL}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(withExtraBody(body, request, options)),
+            body: serializedBody,
+            redirect: "error",
             signal: controller.signal,
           }),
           new Promise<never>((_, reject) => {
             if (!options?.timeouts?.firstByteMs || options.timeouts.firstByteMs <= 0) return;
             firstByteTimeout = setTimeout(() => {
-              controller.abort();
-              reject({
+              // Reject first: the aborted fetch would otherwise win the race as a connection error.
+              const timeout = {
                 scope: "provider_first_byte",
                 message: `ollama first byte timeout after ${options.timeouts!.firstByteMs}ms.`,
-              });
+              };
+              reject(timeout);
+              controller.abort(timeout);
             }, options.timeouts.firstByteMs);
           }),
         ]);
@@ -260,11 +265,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           };
           return;
         }
-        yield {
-          type: "error",
-          error: formatConnectionError("ollama", error),
-          retryable: true,
-        };
+        yield { type: "error", ...normalizeConnectionError("ollama", error) };
         return;
       } finally {
         if (firstByteTimeout) clearTimeout(firstByteTimeout);
@@ -302,13 +303,21 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           if (chunk.message?.content) yield { type: "text", delta: chunk.message.content };
           for (const toolCall of chunk.message?.tool_calls ?? []) {
             const callId = `${idPrefix}-${toolCounter++}`;
-            yield { type: "tool_start", callId, name: toolCall.function.name };
-            yield {
-              type: "tool_call",
-              callId,
-              name: toolCall.function.name,
-              args: ensureRecord(toolCall.function.arguments),
-            };
+            const { name } = toolCall.function;
+            yield { type: "tool_start", callId, name };
+            const args = parseToolArguments(toolCall.function.arguments);
+            if (!args) {
+              yield {
+                type: "tool_error",
+                callId,
+                name,
+                reason: "invalid_tool_arguments",
+                message: `Received malformed JSON arguments for "${name}".`,
+                argsText: stringifyJson(toolCall.function.arguments),
+              };
+              continue;
+            }
+            yield { type: "tool_call", callId, name, args };
           }
           if (chunk.done) {
             sawDone = true;
