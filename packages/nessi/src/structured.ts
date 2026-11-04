@@ -88,27 +88,40 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 const hasUnsupportedComposition = (schema: Record<string, unknown>) =>
-  "anyOf" in schema || "oneOf" in schema || "allOf" in schema || "not" in schema;
+  "oneOf" in schema || "allOf" in schema || "not" in schema;
 
-const isStrictNativeSchemaCompatible = (schema: unknown): boolean => {
+/**
+ * Whether native structured output can enforce the schema. `strict` providers also need every
+ * object property required. `anyOf` (such as Zod's `.nullable()`) works below the root object.
+ */
+const isNativeSchemaCompatible = (schema: unknown, strict: boolean, root = true): boolean => {
   if (!isRecord(schema)) return false;
   if (hasUnsupportedComposition(schema)) return false;
+
+  if ("anyOf" in schema) {
+    const { anyOf, ...rest } = schema;
+    return !root
+      && Array.isArray(anyOf)
+      && anyOf.length > 0
+      && Object.keys(rest).every((key) => key === "description" || key === "default")
+      && anyOf.every((branch) => isNativeSchemaCompatible(branch, strict, false));
+  }
 
   const type = schema.type;
   if (type === "object") {
     const properties = schema.properties;
     const required = schema.required;
     if (!isRecord(properties)) return true;
-    if (!Array.isArray(required)) return false;
+    const requiredKeys: unknown[] = Array.isArray(required) ? required : [];
     for (const key of Object.keys(properties)) {
-      if (!required.includes(key)) return false;
-      if (!isStrictNativeSchemaCompatible(properties[key])) return false;
+      if (strict && !requiredKeys.includes(key)) return false;
+      if (!isNativeSchemaCompatible(properties[key], strict, false)) return false;
     }
     return true;
   }
 
   if (type === "array") {
-    return schema.items === undefined || isStrictNativeSchemaCompatible(schema.items);
+    return schema.items === undefined || isNativeSchemaCompatible(schema.items, strict, false);
   }
 
   if (Array.isArray(type)) {
@@ -306,8 +319,9 @@ const directStructured = async <TOutput extends z.ZodType>(
       generationMs += Math.max(0, Date.now() - requestStartedAt);
     }
   };
-  const useResponseFormat = options.provider.capabilities.structuredOutput === true
-    && isStrictNativeSchemaCompatible(jsonSchema);
+  const { structuredOutput, strictStructuredOutput } = options.provider.capabilities;
+  const useResponseFormat = structuredOutput === true
+    && isNativeSchemaCompatible(jsonSchema, strictStructuredOutput !== false);
   const responseFormat = useResponseFormat ? createResponseFormat(jsonSchema, options.outputName) : undefined;
   const systemPrompt = useResponseFormat
     ? (options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT)

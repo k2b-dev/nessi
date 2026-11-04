@@ -294,6 +294,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       thinking: config.compat?.thinkingFormat !== "none",
       usage: true,
       structuredOutput: config.compat?.structuredOutput !== undefined && config.compat.structuredOutput !== false,
+      ...(config.compat?.structuredOutput === "vllm_structured_outputs" ? { strictStructuredOutput: false } : {}),
     },
 
     async complete(request: GenerateRequest): Promise<GenerateResult> {

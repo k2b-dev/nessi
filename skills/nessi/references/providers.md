@@ -118,6 +118,13 @@ results. It validates the result with Zod, uses native provider structured
 output where available, and falls back to schema instructions plus one repair
 attempt.
 
+Native mode needs a root object. Nullable fields and unions (`anyOf`) below the
+root work natively; `oneOf`, `allOf`, and `not` fall back. Strict providers
+(OpenAI, OpenRouter, Mistral, Anthropic, Gemini, Ollama) also need every object
+property required, so `.optional()` falls back; use `.nullable()` instead.
+vLLM guided decoding sets `capabilities.strictStructuredOutput: false` and
+accepts optional properties natively.
+
 The provider layer also exposes a low-level `responseFormat` request option for
 apps that intentionally want a single provider call:
 
