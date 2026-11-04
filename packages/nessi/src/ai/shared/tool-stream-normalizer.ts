@@ -277,10 +277,15 @@ export async function* normalizeProviderStream(
             break;
           }
 
-          if (tool && !parseArgsText(tool.argsText).ok) {
+          // Adapters pass the arguments they parsed; only an object may become an executable call.
+          if ((tool && !parseArgsText(tool.argsText).ok) || !isRecord(event.args)) {
             malformedCallIds.add(event.callId);
             pending.delete(event.callId);
-            yield* emitIssue(toolIssue("malformed_tool_call", tool, "invalid_tool_arguments"));
+            yield* emitIssue(toolIssue(
+              "malformed_tool_call",
+              tool ?? { callId: event.callId, name: event.name, argsText: "", argsDeltas: [] },
+              "invalid_tool_arguments",
+            ));
             break;
           }
 
