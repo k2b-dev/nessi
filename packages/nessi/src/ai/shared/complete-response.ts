@@ -1,5 +1,5 @@
 import type { ProviderTimeouts } from "../types.js";
-import { formatConnectionError } from "./errors.js";
+import { ERROR_BODY_LIMIT_BYTES, formatConnectionError } from "./errors.js";
 import type { ByteStreamReader } from "./sse.js";
 
 /** Buffer a native response with a total deadline and idle limits after headers. */
@@ -58,6 +58,11 @@ export const fetchCompleteResponse = async (
       const { done, value } = await Promise.race([reader.read(), aborted]);
       if (done) break;
       text += decoder.decode(value, { stream: true });
+      // An error body only feeds the error message.
+      if (!response.ok && text.length >= ERROR_BODY_LIMIT_BYTES) {
+        void reader.cancel?.().catch(() => {});
+        break;
+      }
     }
     text += decoder.decode();
     return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
