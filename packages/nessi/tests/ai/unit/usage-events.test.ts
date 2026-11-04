@@ -33,6 +33,18 @@ describe("interim usage events", () => {
     expect(textBlocks(await collect(normalizeProviderStream(raw())))).toEqual(["Hello"]);
   });
 
+  it("keep a signed thinking block whole and close it on the final usage", async () => {
+    const raw = async function* (): AsyncIterable<RawStreamEvent> {
+      yield { type: "thinking", delta: "Let me " };
+      yield { type: "usage", usage: { input: 3, output: 1, total: 4 } };
+      yield { type: "thinking", delta: "think.", signature: "sig" };
+      yield { type: "usage", usage: { input: 3, output: 2, total: 5 }, finishReason: "stop" };
+    };
+    const blocks = (await collect(normalizeProviderStream(raw())))
+      .flatMap((event) => (event.type === "block_end" ? [event.block] : []));
+    expect(blocks).toEqual([{ type: "thinking", thinking: "Let me think.", signature: "sig" }]);
+  });
+
   it("keep one text block when a gateway sends usage with every chunk", async () => {
     const usage = (output: number) => ({ prompt_tokens: 3, completion_tokens: output, total_tokens: 3 + output });
     stubFetch(() => textResponse(sse(
@@ -87,6 +99,15 @@ describe("cache usage", () => {
     ), "text/event-stream"));
     const events = await collect(provider.stream(request));
     expect(events.at(-1)).toMatchObject({ type: "usage", usage: expected });
+
+    // Cumulative deltas that repeat every counter replace them, a zero included.
+    stubFetch(() => textResponse(sse(
+      ["message_start", { type: "message_start", message: { usage: { ...anthropicUsage, output_tokens: 1 } } }],
+      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { ...anthropicUsage, cache_creation_input_tokens: 0, output_tokens: 4 } }],
+      ["message_stop", { type: "message_stop" }],
+    ), "text/event-stream"));
+    const repeated = await collect(provider.stream(request));
+    expect(repeated.at(-1)).toMatchObject({ type: "usage", usage: { input: 60, output: 4, total: 64, cacheRead: 50, cacheWrite: 0 } });
   });
 
   it("adds cache writes across turns", () => {
