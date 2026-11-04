@@ -1,3 +1,4 @@
+import { ProviderError } from "./errors.js";
 export type SSEEvent = {
   event?: string;
   data: string;
@@ -55,12 +56,16 @@ const parseFrame = (frame: string): SSEEvent | null => {
  */
 export const MAX_STREAM_RECORD_CHARS = 8 * 1024 * 1024;
 
-export class StreamRecordTooLargeError extends Error {
+/** Not retryable: the same answer would arrive as the same oversized record. */
+export class StreamRecordTooLargeError extends ProviderError {
   constructor() {
-    super(`Stream record exceeds ${MAX_STREAM_RECORD_CHARS} characters.`);
-    this.name = "StreamRecordTooLargeError";
+    super(`Stream record exceeds ${MAX_STREAM_RECORD_CHARS} characters.`, { kind: "provider_error", retryable: false });
   }
 }
+
+const checkRecordLength = (length: number) => {
+  if (length > MAX_STREAM_RECORD_CHARS) throw new StreamRecordTooLargeError();
+};
 
 const readWithTimeout = async (
   reader: ByteStreamReader,
@@ -127,9 +132,11 @@ export const readRecordBatches = async function* (
       return [];
     }
     // The first record ends here; its start is in the fragments, of which `tail` is the end.
+    checkRecordLength(pendingLength - tail.length + end);
     const records = [fragments.join("").slice(0, pendingLength - tail.length) + scan.slice(0, end)];
     start = end + separator.length;
     while ((end = scan.indexOf(separator, start)) >= 0) {
+      checkRecordLength(end - start);
       records.push(scan.slice(start, end));
       start = end + separator.length;
     }
@@ -148,11 +155,13 @@ export const readRecordBatches = async function* (
     if (done) break;
     const records = split(normalize(decoder.decode(value, { stream: true })));
     if (records.length > 0) yield records;
-    if (pendingLength > MAX_STREAM_RECORD_CHARS) throw new StreamRecordTooLargeError();
+    // The pending text may end with the first characters of its separator.
+    checkRecordLength(pendingLength - tailLength);
   }
 
   const records = split(normalize(decoder.decode()));
   const rest = fragments.join("") + (carriedCR ? "\r" : "");
+  checkRecordLength(rest.length);
   if (rest) records.push(rest);
   if (records.length > 0) yield records;
 };

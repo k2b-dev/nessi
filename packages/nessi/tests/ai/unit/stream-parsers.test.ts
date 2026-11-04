@@ -1,4 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { ollama, openAICompatible } from "../../../src/ai/index.js";
+import { stubFetch, textResponse } from "../helpers/fixtures.js";
 import { parseNDJSON } from "../../../src/ai/shared/ndjson.js";
 import { MAX_STREAM_RECORD_CHARS, parseSSE, readRecordBatches, SSETimeoutError, StreamRecordTooLargeError } from "../../../src/ai/shared/sse.js";
 
@@ -95,6 +97,27 @@ describe("record splitting", () => {
     expect(JSON.parse(events[0]!.data).value).toHaveLength(200_000);
   });
 
+  it("rejects a completed record past the budget and accepts one at it", async () => {
+    const atLimit = "x".repeat(MAX_STREAM_RECORD_CHARS);
+    for (const chunks of [[`${atLimit}\n`, "\n"], [`${atLimit}\n\n`], [atLimit.slice(0, 100), `${atLimit.slice(100)}\n\n`]]) {
+      expect((await drain(readRecordBatches(readerFromChunks(chunks), "\n\n"))).flat().map((record) => record.length)).toEqual([MAX_STREAM_RECORD_CHARS]);
+    }
+    for (const chunks of [[`${atLimit}x\n\n`], ["x", `${atLimit}\n\nnext`], [`${atLimit}x`]]) {
+      expect(await failure(readRecordBatches(readerFromChunks(chunks), "\n\n"))).toBeInstanceOf(StreamRecordTooLargeError);
+    }
+  });
+
+  it("splits multi-byte characters across byte chunks", async () => {
+    const bytes = encoder.encode('{"a":"€ü"}\n{"b":"ß"}\n');
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+        controller.close();
+      },
+    }).getReader();
+    expect(await drain(parseNDJSON(reader))).toEqual([{ a: "€ü" }, { b: "ß" }]);
+  });
+
   it("stops a record that grows past the budget", async () => {
     let pulls = 0;
     const chunk = encoder.encode("x".repeat(1024 * 1024));
@@ -106,8 +129,30 @@ describe("record splitting", () => {
     }).getReader();
     for (const parse of [parseSSE, parseNDJSON]) {
       pulls = 0;
-      expect(await failure(parse(reader()))).toBeInstanceOf(StreamRecordTooLargeError);
+      const error = await failure(parse(reader()));
+      expect(error).toBeInstanceOf(StreamRecordTooLargeError);
+      expect(error).toMatchObject({ retryable: false });
       expect(pulls).toBeLessThanOrEqual(MAX_STREAM_RECORD_CHARS / chunk.byteLength + 2);
+    }
+  });
+});
+
+describe("oversized records through adapters", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  it("end the stream with a non-retryable provider error", async () => {
+    const huge = `data: {"choices":[{"delta":{"content":"${"x".repeat(MAX_STREAM_RECORD_CHARS)}"}}]}\n\n`;
+    for (const provider of [
+      openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }),
+      ollama("test", { baseURL: "https://example.test" }),
+    ]) {
+      stubFetch(() => textResponse(provider.name === "ollama" ? `{"message":{"content":"${"x".repeat(MAX_STREAM_RECORD_CHARS)}"}}\n` : huge, "text/event-stream"));
+      const issues = [];
+      for await (const event of provider.stream({ messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }] })) {
+        if (event.type === "issue") issues.push(event.issue);
+      }
+      expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false })]);
     }
   });
 });
