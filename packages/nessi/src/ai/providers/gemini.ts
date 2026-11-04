@@ -1,11 +1,11 @@
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, providerError, ProviderError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { safeJsonParse } from "../shared/json.js";
+import { isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -30,7 +30,7 @@ type GeminiPart = {
   /** Opaque signature that must be returned in the same part (required for Gemini 3 function calls). */
   thoughtSignature?: string;
   inlineData?: { mimeType: string; data: string };
-  functionCall?: { name: string; args?: Record<string, unknown> };
+  functionCall?: { name: string; args?: unknown };
   functionResponse?: { name: string; response: Record<string, unknown> };
 };
 
@@ -168,15 +168,17 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
   const baseURL = (options?.baseURL ?? "https://generativelanguage.googleapis.com/v1beta/models").replace(/\/+$/, "");
   const apiKey = options?.apiKey ?? globalThis.process?.env?.GEMINI_API_KEY ?? globalThis.process?.env?.GOOGLE_API_KEY;
 
-  const urlFor = (path: "generateContent" | "streamGenerateContent") => {
-    const key = apiKey ? `?key=${encodeURIComponent(apiKey)}` : "";
-    const alt = path === "streamGenerateContent" ? `${key ? "&" : "?"}alt=sse` : "";
-    return `${baseURL}/${model}:${path}${key}${alt}`;
+  const urlFor = (path: "generateContent" | "streamGenerateContent") =>
+    `${baseURL}/${model}:${path}${path === "streamGenerateContent" ? "?alt=sse" : ""}`;
+  // The key goes in a header; URLs end up in proxy and access logs.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(apiKey ? { "x-goog-api-key": apiKey } : {}),
   };
 
   const buildBody = (request: GenerateRequest) => {
     const body: Record<string, unknown> = {
-      contents: convertMessages(request.messages),
+      contents: buildRequest("gemini", () => convertMessages(request.messages)),
     };
     if (request.systemPrompt) {
       body.systemInstruction = { parts: [{ text: request.systemPrompt }] };
@@ -214,28 +216,40 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const requestId = createRequestId();
       const response = await fetchCompleteResponse(urlFor("generateContent"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildBody(request)),
+        headers,
+        body: serializeRequest("gemini", buildBody(request)),
         signal: request.signal,
       }, "gemini", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("gemini", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<GeminiResponse>(await response.text());
-      if (!payload) throw new Error("gemini returned invalid JSON.");
+      const payload = parseJsonRecord<GeminiResponse>(await response.text());
+      if (!payload) throw invalidResponseError("gemini");
+      const envelope = errorEnvelope("gemini", payload);
+      if (envelope) throw providerError(envelope);
+      // A blocked prompt has no candidates; the stream reports the same as a provider error.
+      const blockReason = payload.promptFeedback?.blockReason;
+      if (blockReason) throw new ProviderError(`gemini blocked the prompt (${blockReason}).`, { kind: "provider_error", retryable: false });
+      const first = payload.candidates?.[0];
+      // A safety stop may carry no content; a candidate with neither is not an answer.
+      if (!first || (!isRecord(first.content) && !first.finishReason)) {
+        throw new ProviderError("gemini returned no candidates.", { kind: "provider_error", retryable: true });
+      }
       const candidate = payload.candidates?.[0];
       const content: AssistantContentBlock[] = [];
       let toolCount = 0;
       for (const part of candidate?.content?.parts ?? []) {
         if (part.functionCall) {
+          const args = parseToolArguments(part.functionCall.args);
+          if (!args) throw malformedToolArgumentsError("gemini", part.functionCall.name);
           content.push({
             type: "tool_call",
             id: `${requestId}-${toolCount++}`,
             name: part.functionCall.name,
-            args: part.functionCall.args ?? {},
+            args,
             ...signatureOf(part),
           });
         } else if (part.thought) {
@@ -259,7 +273,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const result = await openSSEStream(
         urlFor("streamGenerateContent"),
-        { "Content-Type": "application/json" },
+        headers,
         buildBody(request),
         "gemini",
         request.signal,
@@ -278,8 +292,17 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       let rawFinishReason: string | undefined;
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
-        const payload = safeJsonParse<GeminiResponse>(event.data);
-        if (!payload) continue;
+        if (!event.data.trim()) continue;
+        const payload = parseJsonRecord<GeminiResponse>(event.data);
+        if (!payload) {
+          yield malformedRecordError("gemini");
+          return;
+        }
+        const envelope = errorEnvelope("gemini stream", payload);
+        if (envelope) {
+          yield { type: "error", ...envelope };
+          return;
+        }
         if (payload.usageMetadata) latestUsage = usageFromResponse(payload, options);
         // A blocked prompt has no candidates and therefore no finish reason; it is not a truncated stream.
         const blockReason = payload.promptFeedback?.blockReason;
@@ -294,14 +317,21 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
         for (const part of parts) {
           if (part.functionCall) {
             const callId = `${requestId}-${toolCounter++}`;
-            yield { type: "tool_start", callId, name: part.functionCall.name };
-            yield {
-              type: "tool_call",
-              callId,
-              name: part.functionCall.name,
-              args: part.functionCall.args ?? {},
-              ...signatureOf(part),
-            };
+            const { name } = part.functionCall;
+            yield { type: "tool_start", callId, name };
+            const args = parseToolArguments(part.functionCall.args);
+            if (!args) {
+              yield {
+                type: "tool_error",
+                callId,
+                name,
+                reason: "invalid_tool_arguments",
+                message: `Received malformed JSON arguments for "${name}".`,
+                argsText: stringifyJson(part.functionCall.args),
+              };
+              continue;
+            }
+            yield { type: "tool_call", callId, name, args, ...signatureOf(part) };
           } else if (part.thought) {
             yield { type: "thinking", delta: part.text ?? "", ...signatureOf(part) };
           } else if (part.text || part.thoughtSignature !== undefined) {

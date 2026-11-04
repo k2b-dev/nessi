@@ -238,9 +238,20 @@ console.log(result.aggregate.usage);
 
 For providers and schemas that are safe for native structured output, Nessi
 passes a provider-specific `responseFormat`. Otherwise it falls back to schema
-instructions and one repair attempt. `input` can be a string, content parts, or
+instructions and one repair attempt. Nullable fields and unions below the root
+stay native. Strict providers fall back for `.optional()` properties and open
+objects; vLLM guided decoding (`capabilities.strictStructuredOutput: false`)
+accepts them. `input` can be a string, content parts, or
 a full user message, including image file parts when the provider supports
 images.
+
+Failures throw `StructuredOutputError` with a `code`: `invalid_output`,
+`truncated` (the response hit the output token limit), `provider_stopped` (the
+provider ended it with an error, a refusal, or an interruption), `aborted`,
+`loop_failed`, `max_turns`, or `unsupported_tool`. In both modes, output from a
+response that did not end normally is never accepted, and direct mode never
+repairs it. Provider and output failures carry `details.aggregate` with the
+usage and timing of the responses that completed.
 
 `nessi.structured()` can use server tools for bounded task work. It adds an
 internal `submit_result` tool and returns after that tool receives a valid
@@ -311,9 +322,19 @@ calls. Set `totalMs` to the maximum duration you want for those calls. Without
 `totalMs`, the wait for native response headers has no provider timeout; pass
 a request `signal` if the caller owns the deadline.
 
-A native timeout rejects with an `Error` carrying `kind: "timeout"`,
+A native timeout rejects with a `ProviderError` carrying `kind: "timeout"`,
 `scope: "provider_total"` or `"provider_idle"`, and `retryable: true`. Caller
 cancellation preserves the signal's original reason.
+
+## Provider errors
+
+`complete()` and `completeFromStream()` throw a `ProviderError` (from
+`@k2b/nessi/ai`) when a provider request fails. It carries `kind`
+(`"provider_error"`, `"timeout"`, or `"invalid_request"` for a request nessi
+could not build and never sent), `retryable`, and, when known, `status`,
+`code`, `retryAfterMs`, `contextOverflow`, `overflowRatio`, and the timeout
+`scope`. Streaming `provider_error` issues carry the same `status`, `code`, and
+`retryAfterMs`. Nessi never retries; a caller abort throws the signal's reason.
 
 ## Reasoning effort
 

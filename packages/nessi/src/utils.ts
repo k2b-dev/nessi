@@ -81,3 +81,18 @@ export const projectHistoricalToolResults = (messages: Message[], loopId: string
     if (historicalResult.originLoopId === loopId) return providerMessage;
     return { ...providerMessage, result: historicalResult.value };
   })
+
+/**
+ * Aborts `controller` with `signal`'s reason when `signal` aborts. Returns a cleanup that detaches
+ * the listener, so a long-lived caller signal does not collect one listener per finished run.
+ */
+export const followAbortSignal = (signal: AbortSignal | undefined, controller: AbortController): (() => void) => {
+  if (!signal) return () => {};
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return () => {};
+  }
+  const abort = () => controller.abort(signal.reason);
+  signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
+};
