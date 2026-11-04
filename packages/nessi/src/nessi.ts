@@ -31,6 +31,7 @@ import { aggregateFromTurns, buildLoopTiming, cloneUsage } from "./aggregates.js
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./ai/shared/messages.js";
 import { cachedToolSpec, toolToSpec } from "./tools.js";
 import {
+  followAbortSignal,
   closeUnansweredToolCalls,
   createLoopId,
   projectHistoricalToolResults,
@@ -615,10 +616,16 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   };
 
-  if (externalSignal) {
-    if (externalSignal.aborted) abortController.abort();
-    else externalSignal.addEventListener("abort", () => abortController.abort(), { once: true });
-  }
+  // Attached on the first next(), so a loop that never runs leaves no listener behind.
+  let detachExternal: (() => void) | undefined;
+  let detached = false;
+  const attachExternalSignal = () => {
+    if (!detached) detachExternal ??= followAbortSignal(externalSignal, abortController);
+  };
+  const detachExternalSignal = () => {
+    detached = true;
+    detachExternal?.();
+  };
 
   const signal = abortController.signal;
 
@@ -781,7 +788,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         return;
       }
 
-      const output = pulled.value.result;
+      let output = pulled.value.result;
       if (tool.def.outputSchema) {
         const outputResult = tool.def.outputSchema.safeParse(output);
         if (!outputResult.success) {
@@ -798,6 +805,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
           return;
         }
+        // Downstream sees what the schema produced: stripped fields, defaults and transforms applied.
+        output = outputResult.data;
       }
 
       const historicalIssue = await appendSuccessfulToolResult(tool, tc, validatedInput, output);
@@ -851,7 +860,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
 
     const toolAbort = new AbortController();
-    const abortTool = () => toolAbort.abort();
+    const abortTool = () => toolAbort.abort(signal.reason);
     if (signal.aborted) abortTool();
     else signal.addEventListener("abort", abortTool, { once: true });
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -1094,6 +1103,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: output, isError: true };
           return;
         }
+        // Downstream sees what the schema produced: stripped fields, defaults and transforms applied.
+        result = outputResult.data;
       }
 
       const historicalIssue = await appendSuccessfulToolResult(tool, tc, validatedInput, result);
@@ -1720,25 +1731,44 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   }
 
-  const eventSource = coalesce ? coalesceOutboundEvents(closeOpenTurns(run()), coalesce) : closeOpenTurns(run());
+  async function* detachWhenDone(source: AsyncGenerator<OutboundEvent>): AsyncGenerator<OutboundEvent> {
+    try {
+      yield* source;
+    } finally {
+      detachExternalSignal();
+    }
+  }
+
+  const events = detachWhenDone(closeOpenTurns(run()));
+  const eventSource = coalesce ? coalesceOutboundEvents(events, coalesce) : events;
   const generator = eventSource[Symbol.asyncIterator]();
 
   const loop: NessiLoop = {
     [Symbol.asyncIterator]() {
       return {
         async next() {
+          attachExternalSignal();
           const result = await generator.next();
           if (!result.done && result.value) {
-            for (const listener of subscribers) listener(result.value);
+            try {
+              for (const listener of subscribers) listener(result.value);
+            } catch (error) {
+              // A failing subscriber ends the loop; the suspended generator never reaches its cleanup.
+              abortController.abort();
+              detachExternalSignal();
+              throw error;
+            }
           }
           return result;
         },
         async return(value?: OutboundEvent) {
           // Stopping iteration early ends the loop: cancel running tools and provider requests.
           abortController.abort();
+          detachExternalSignal();
           return generator.return(value as OutboundEvent);
         },
         async throw(error?: unknown) {
+          detachExternalSignal();
           return generator.throw(error);
         },
       };

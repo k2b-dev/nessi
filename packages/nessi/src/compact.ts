@@ -4,7 +4,7 @@ import type {
   CompactOptions,
   CompactResult,
 } from "./types.js";
-import { createLoopId, zeroUsage, toErrorMessage } from "./utils.js";
+import { createLoopId, followAbortSignal, zeroUsage, toErrorMessage } from "./utils.js";
 
 /**
  * Run compaction as a loop-style operation so consumers can iterate or subscribe to events.
@@ -26,10 +26,16 @@ export const compact = (options: CompactOptions): CompactLoop => {
   const loopId = requestedLoopId?.trim() ? requestedLoopId : createLoopId();
   const eventFields = { agentId, loopId };
 
-  if (externalSignal) {
-    if (externalSignal.aborted) abortController.abort();
-    else externalSignal.addEventListener("abort", () => abortController.abort(), { once: true });
-  }
+  // Attached on the first next(), so a run that never starts leaves no listener behind.
+  let detachExternal: (() => void) | undefined;
+  let detached = false;
+  const attachExternalSignal = () => {
+    if (!detached) detachExternal ??= followAbortSignal(externalSignal, abortController);
+  };
+  const detachExternalSignal = () => {
+    detached = true;
+    detachExternal?.();
+  };
 
   const signal = abortController.signal;
 
@@ -41,6 +47,14 @@ export const compact = (options: CompactOptions): CompactLoop => {
   })
 
   async function* run(): AsyncGenerator<CompactEvent> {
+    try {
+      yield* compactOnce();
+    } finally {
+      detachExternalSignal();
+    }
+  }
+
+  async function* compactOnce(): AsyncGenerator<CompactEvent> {
     let entriesBefore = 0;
     yield { type: "loop_start", ...eventFields };
 
@@ -104,16 +118,26 @@ export const compact = (options: CompactOptions): CompactLoop => {
     [Symbol.asyncIterator]() {
       return {
         async next() {
+          attachExternalSignal();
           const result = await generator.next();
           if (!result.done && result.value) {
-            for (const subscriber of subscribers) subscriber(result.value);
+            try {
+              for (const subscriber of subscribers) subscriber(result.value);
+            } catch (error) {
+              // A failing subscriber ends the run; the suspended generator never reaches its cleanup.
+              abortController.abort();
+              detachExternalSignal();
+              throw error;
+            }
           }
           return result;
         },
         async return(value?: CompactEvent) {
+          detachExternalSignal();
           return generator.return(value as CompactEvent);
         },
         async throw(err?: unknown) {
+          detachExternalSignal();
           return generator.throw(err);
         },
       };
