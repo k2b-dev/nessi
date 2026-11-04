@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -251,7 +251,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
       };
       if (request.tools?.length) body.tools = toAnthropicTools(request.tools);
@@ -313,7 +313,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
         stream: true,
       };

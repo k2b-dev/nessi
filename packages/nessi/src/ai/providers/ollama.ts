@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
@@ -160,7 +160,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt),
+        messages: buildRequest("ollama", () => convertMessages(request.messages, request.systemPrompt)),
         stream: false,
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
@@ -207,7 +207,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt),
+        messages: buildRequest("ollama", () => convertMessages(request.messages, request.systemPrompt)),
         stream: true,
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);

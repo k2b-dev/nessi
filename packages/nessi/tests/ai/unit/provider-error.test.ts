@@ -147,16 +147,24 @@ describe("parseRetryAfterMs", () => {
 describe("requests nessi cannot build", () => {
   const pdf = { messages: [{ role: "user" as const, content: [{ type: "file" as const, mediaType: "application/pdf", data: "JVBERi0=" }] }] };
   const bigint = { ...request, extraBody: { seed: 1n } };
+  const bigintToolResult = {
+    messages: [
+      { role: "user" as const, content: [{ type: "text" as const, text: "Count" }] },
+      { role: "assistant" as const, content: [{ type: "tool_call" as const, id: "call_00001", name: "count", args: {} }] },
+      { role: "tool_result" as const, callId: "call_00001", name: "count", result: { total: 1n } },
+    ],
+  };
 
   for (const { name, create } of providers) {
-    for (const [label, input] of [["an unsupported file type", pdf], ["a value JSON cannot represent", bigint]] as const) {
+    for (const [label, input] of [["an unsupported file type", pdf], ["a value JSON cannot represent", bigint], ["a tool result JSON cannot represent", bigintToolResult]] as const) {
       it(`${name} fails ${label} as not retryable without sending it`, async () => {
         let sent = 0;
         stubFetch(() => { sent++; return new Response("{}"); });
         const native = await rejection(create().complete(input));
         expect(native).toBeInstanceOf(ProviderError);
         expect(native).toMatchObject({ kind: "invalid_request", retryable: false });
-        expect(await rejection(completeFromStream(create(), input))).toMatchObject({ retryable: false });
+        // The stream path reports it as a provider_error issue; retryable is the contract.
+        expect(await rejection(completeFromStream(create(), input))).toMatchObject({ kind: "provider_error", retryable: false });
         const issues = [];
         for await (const event of create().stream(input)) if (event.type === "issue") issues.push(event.issue);
         expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false })]);

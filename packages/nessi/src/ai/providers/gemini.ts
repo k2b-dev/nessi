@@ -1,4 +1,4 @@
-import { invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -176,7 +176,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
 
   const buildBody = (request: GenerateRequest) => {
     const body: Record<string, unknown> = {
-      contents: convertMessages(request.messages),
+      contents: buildRequest("gemini", () => convertMessages(request.messages)),
     };
     if (request.systemPrompt) {
       body.systemInstruction = { parts: [{ text: request.systemPrompt }] };

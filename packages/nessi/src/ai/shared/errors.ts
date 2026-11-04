@@ -169,6 +169,16 @@ export const providerError = (
 export const invalidRequestError = (message: string, options?: { cause?: unknown }) =>
   new ProviderError(message, { kind: "invalid_request", retryable: false }, options);
 
+/** Runs a local request-building step; its failures are `invalid_request` and nothing is sent. */
+export const buildRequest = <T>(label: string, build: () => T): T => {
+  try {
+    return build();
+  } catch (error) {
+    if (error instanceof ProviderError) throw error;
+    throw invalidRequestError(`${label} request could not be built: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+};
+
 /** The request body as JSON; values JSON cannot represent fail before anything is sent. */
 export const serializeRequest = (label: string, body: unknown) => {
   try {

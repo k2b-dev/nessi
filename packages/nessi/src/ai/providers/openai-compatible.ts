@@ -1,4 +1,4 @@
-import { invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
@@ -297,7 +297,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
     },
 
     async complete(request: GenerateRequest): Promise<GenerateResult> {
-      const messages = convertMessages(request.messages, request.systemPrompt, config);
+      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
       const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
       const body: Record<string, unknown> = {
         model: config.model,
@@ -336,7 +336,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
 
     stream(request: GenerateRequest): AsyncIterable<StreamEvent> {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
-      const messages = convertMessages(request.messages, request.systemPrompt, config);
+      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
       const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
 
       const body: Record<string, unknown> = {

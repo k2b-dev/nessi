@@ -1,4 +1,4 @@
-import { invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -249,7 +249,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt, options),
+        messages: buildRequest("mistral", () => convertMessages(request.messages, request.systemPrompt, options)),
         stream: false,
       };
       if (request.tools?.length) {
@@ -303,7 +303,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt, options),
+        messages: buildRequest("mistral", () => convertMessages(request.messages, request.systemPrompt, options)),
         stream: true,
       };
       if (request.tools?.length) {
