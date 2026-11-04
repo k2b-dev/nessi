@@ -59,8 +59,10 @@ export const openSSEStream = async (
       new Promise<never>((_, reject) => {
         if (!timeouts?.firstByteMs || timeouts.firstByteMs <= 0) return;
         firstByteTimeout = setTimeout(() => {
-          controller.abort();
-          reject(new SSETimeoutError("provider_first_byte", timeouts.firstByteMs!));
+          // Reject first: the aborted fetch would otherwise win the race as a connection error.
+          const timeout = new SSETimeoutError("provider_first_byte", timeouts.firstByteMs!);
+          reject(timeout);
+          controller.abort(timeout);
         }, timeouts.firstByteMs);
       }),
     ]);

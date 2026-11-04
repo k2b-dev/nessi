@@ -61,6 +61,39 @@ describe("ProviderError", () => {
         expect(error).toMatchObject({ kind: "provider_error", retryable: true, code: "ECONNREFUSED" });
       });
 
+      it(`${name} ${mode} keeps the runtime code from a Node-style cause`, async () => {
+        stubFetch(() => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect"), { code: "ECONNRESET" }) }); });
+        expect(await rejection(run(create()))).toMatchObject({ kind: "provider_error", retryable: true, code: "ECONNRESET" });
+      });
+
+      it(`${name} ${mode} reports a connection that drops during the body`, async () => {
+        stubFetch(() => new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+            controller.error(Object.assign(new TypeError("socket closed"), { code: "ECONNRESET" }));
+          },
+        }), { headers: { "Content-Type": mode === "complete()" ? "application/json" : "text/event-stream" } }));
+        const error = await rejection(run(create()));
+        expect(error).toBeInstanceOf(ProviderError);
+        expect(error).toMatchObject({ retryable: true });
+      });
+
+      it(`${name} ${mode} rethrows an abort that lands as the body ends`, async () => {
+        const controller = new AbortController();
+        const reason = { stoppedBy: "caller" };
+        stubFetch(() => new Response(new ReadableStream({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode("{}"));
+          },
+          pull(stream) {
+            // The final read resolves before the abort reaches the request.
+            stream.close();
+            controller.abort(reason);
+          },
+        }), { headers: { "Content-Type": "application/json" } }));
+        expect(await rejection(run(create(), controller.signal))).toBe(reason);
+      });
+
       it(`${name} ${mode} rethrows the caller's abort reason`, async () => {
         const controller = new AbortController();
         const reason = new Error("caller stopped");
@@ -73,12 +106,19 @@ describe("ProviderError", () => {
     }
   }
 
-  it("completeFromStream() reports a stream deadline as a timeout", async () => {
-    stubFetch(() => new Promise<Response>(() => {}));
-    const provider = openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts: { firstByteMs: 5 } });
-    const error = await rejection(completeFromStream(provider, request));
-    expect(error).toBeInstanceOf(ProviderError);
-    expect(error).toMatchObject({ kind: "timeout", retryable: true, scope: "provider_first_byte" });
+  it("completeFromStream() reports a stream deadline as a timeout, also when fetch rejects on abort", async () => {
+    // Like a real fetch, reject in the same tick as the abort.
+    globalThis.fetch = Object.assign((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+    }), { preconnect: () => {} });
+    for (const provider of [
+      openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
+      ollama("test", { baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
+    ]) {
+      const error = await rejection(completeFromStream(provider, request));
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error).toMatchObject({ kind: "timeout", retryable: true, scope: "provider_first_byte" });
+    }
   });
 
   it("complete() reports a response deadline as a timeout", async () => {

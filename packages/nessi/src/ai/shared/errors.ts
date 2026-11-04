@@ -100,11 +100,15 @@ const withRetryAfter = (retryAfterMs: number | undefined) => (retryAfterMs !== u
 export const formatConnectionError = (label: string, error: unknown) =>
   `${label} connection failed: ${error instanceof Error ? error.message : String(error)}`;
 
-/** A request that failed before a response; `code` is the runtime's, such as `ECONNREFUSED`. */
+const errorCode = (error: unknown) =>
+  typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : undefined;
+
+/**
+ * A request whose connection failed; `code` is the runtime's, such as `ECONNREFUSED`. Bun sets it
+ * on the error, Node on its `cause`.
+ */
 export const normalizeConnectionError = (label: string, error: unknown) => {
-  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
+  const code = errorCode(error) ?? (error instanceof Error ? errorCode(error.cause) : undefined);
   return { error: formatConnectionError(label, error), retryable: true, ...(code !== undefined ? { code } : {}) };
 };
 

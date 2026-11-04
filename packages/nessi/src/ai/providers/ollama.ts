@@ -241,11 +241,13 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           new Promise<never>((_, reject) => {
             if (!options?.timeouts?.firstByteMs || options.timeouts.firstByteMs <= 0) return;
             firstByteTimeout = setTimeout(() => {
-              controller.abort();
-              reject({
+              // Reject first: the aborted fetch would otherwise win the race as a connection error.
+              const timeout = {
                 scope: "provider_first_byte",
                 message: `ollama first byte timeout after ${options.timeouts!.firstByteMs}ms.`,
-              });
+              };
+              reject(timeout);
+              controller.abort(timeout);
             }, options.timeouts.firstByteMs);
           }),
         ]);

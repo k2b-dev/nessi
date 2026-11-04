@@ -48,7 +48,10 @@ export const fetchCompleteResponse = async (
       aborted,
     ]);
     reader = response.body?.getReader();
-    if (!reader) return response;
+    if (!reader) {
+      signal?.throwIfAborted();
+      return response;
+    }
 
     const decoder = new TextDecoder();
     let text = "";
@@ -60,11 +63,16 @@ export const fetchCompleteResponse = async (
       text += decoder.decode(value, { stream: true });
     }
     text += decoder.decode();
+    // The last read can win the race against an abort that already happened.
+    signal?.throwIfAborted();
     return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
   } catch (error) {
     controller.abort(error);
     void reader?.cancel?.(error).catch(() => {});
-    throw error;
+    if (signal?.aborted) throw signal.reason;
+    if (error instanceof ProviderError) throw error;
+    // The connection failed while the body was read.
+    throw providerError(normalizeConnectionError(label, error), { cause: error });
   } finally {
     clearTimeout(totalTimeout);
     clearTimeout(idleTimeout);
