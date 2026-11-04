@@ -75,6 +75,8 @@ export type Usage = {
   output: number;
   /** Part of `input` the provider read from its prompt cache. */
   cacheRead?: number;
+  /** Part of `output` the model spent on reasoning. */
+  reasoning?: number;
   total: number;
 };
 

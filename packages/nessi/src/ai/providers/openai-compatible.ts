@@ -87,6 +87,8 @@ type SSEChunk = {
     /** Includes `prompt_tokens_details.cached_tokens`. */
     prompt_tokens?: number;
     prompt_tokens_details?: { cached_tokens?: number } | null;
+    /** Includes `reasoning_tokens` in `completion_tokens`. */
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
     completion_tokens?: number;
     total_tokens?: number;
   };
@@ -228,6 +230,8 @@ const usageFromChunk = (chunk: SSEChunk): Usage | undefined => {
   const usage = makeUsage(chunk.usage.prompt_tokens ?? 0, chunk.usage.completion_tokens ?? 0);
   const cacheRead = chunk.usage.prompt_tokens_details?.cached_tokens;
   if (typeof cacheRead === "number") usage.cacheRead = cacheRead;
+  const reasoning = chunk.usage.completion_tokens_details?.reasoning_tokens;
+  if (typeof reasoning === "number") usage.reasoning = reasoning;
   return usage;
 };
 

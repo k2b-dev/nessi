@@ -25,6 +25,9 @@ export const mergeUsage = (left: Usage | undefined, right: Usage | undefined): U
   if (left?.cacheRead !== undefined || right.cacheRead !== undefined) {
     next.cacheRead = (left?.cacheRead ?? 0) + (right.cacheRead ?? 0);
   }
+  if (left?.reasoning !== undefined || right.reasoning !== undefined) {
+    next.reasoning = (left?.reasoning ?? 0) + (right.reasoning ?? 0);
+  }
   return next;
 }
 

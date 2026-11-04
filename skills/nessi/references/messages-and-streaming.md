@@ -234,12 +234,14 @@ type Usage = {
   output: number;
   total: number;
   cacheRead?: number;
+  reasoning?: number;
 };
 ```
 
 `input` counts every prompt token, including cached ones. `cacheRead` is the
 part of `input` the endpoint read from its prompt cache
-(`prompt_tokens_details.cached_tokens`). nessi does not price usage; apply
+(`prompt_tokens_details.cached_tokens`). `reasoning` is the part of `output`
+the model spent on reasoning (`completion_tokens_details.reasoning_tokens`). nessi does not price usage; apply
 prices in the application.
 
 A `usage` event without `finishReason` is an interim count; the final one
