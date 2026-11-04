@@ -193,6 +193,13 @@ When the provider and schema are safe for native structured output, Nessi passes
 `responseFormat` to the adapter. Otherwise it adds schema instructions and
 performs one repair attempt if the first response is invalid.
 
+Failures throw `StructuredOutputError` with a `code`: `invalid_output`,
+`truncated` (the response hit the output token limit), `provider_stopped` (the
+provider ended it with an error, a refusal, or an interruption), `aborted`,
+`loop_failed`, `max_turns`, or `unsupported_tool`. A response that did not end
+normally is never accepted or repaired. `details.aggregate` carries the usage
+of every attempt that ran.
+
 `nessi.structured()` may use server tools:
 
 ```ts

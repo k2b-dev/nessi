@@ -37,7 +37,11 @@ export type StructuredOutputErrorCode =
   | "unsupported_tool"
   | "loop_failed"
   | "max_turns"
-  | "aborted";
+  | "aborted"
+  /** The response stopped at the output token limit. */
+  | "truncated"
+  /** The provider ended the response with an error, a refusal, or an interruption. */
+  | "provider_stopped";
 
 export class StructuredOutputError extends Error {
   readonly code: StructuredOutputErrorCode;
@@ -252,6 +256,19 @@ const resultToTurn = (result: GenerateResult): LoopTurnAggregate => {
   };
 };
 
+/** A response that did not end normally; its text is never accepted or repaired. */
+const unfinishedResponse = (result: GenerateResult): { message: string; code: StructuredOutputErrorCode } | undefined => {
+  const reasons = new Set([result.finishReason, result.message.stopReason]);
+  if (reasons.has("aborted")) return { message: "Provider response was aborted.", code: "aborted" };
+  if (reasons.has("max_tokens")) {
+    return { message: "Provider response stopped at the output token limit before the structured output was complete.", code: "truncated" };
+  }
+  for (const reason of ["error", "interrupted"] as const) {
+    if (reasons.has(reason)) return { message: `Provider ended the response with reason: ${reason}.`, code: "provider_stopped" };
+  }
+  return undefined;
+};
+
 const unsupportedToolError = (message: string) =>
   new StructuredOutputError(message, "unsupported_tool");
 
@@ -294,17 +311,37 @@ const directStructured = async <TOutput extends z.ZodType>(
 ): Promise<StructuredResult<z.infer<TOutput>>> => {
   const startedAt = Date.now();
   let generationMs = 0;
+  const attempts: GenerateResult[] = [];
+  const aggregateOfAttempts = () => {
+    const aggregate = aggregateFromTurns(attempts.map(resultToTurn));
+    aggregate.timing = buildLoopTiming({
+      wallMs: Math.max(0, Date.now() - startedAt),
+      generationMs,
+      toolExecutionMs: 0,
+      actionWaitMs: 0,
+    }, aggregate.usage);
+    return aggregate;
+  };
+  // Every failure reports the attempts that already ran, so their usage is not lost.
+  const failure = (message: string, code: StructuredOutputErrorCode, details?: Record<string, unknown>) =>
+    new StructuredOutputError(message, code, { ...details, attempts: attempts.length, aggregate: aggregateOfAttempts() });
   const completeWithTiming = async (request: Parameters<typeof options.provider.complete>[0]) => {
     const requestStartedAt = Date.now();
+    let result: GenerateResult;
     try {
-      return await options.provider.complete(request);
+      result = await options.provider.complete(request);
     } catch (error) {
       // Match the tool-loop mode, which reports provider failures as StructuredOutputError.
       const code = options.signal?.aborted ? "aborted" : "loop_failed";
-      throw new StructuredOutputError(toErrorMessage(error), code, { cause: error });
+      throw failure(toErrorMessage(error), code, { cause: error });
     } finally {
       generationMs += Math.max(0, Date.now() - requestStartedAt);
     }
+    attempts.push(result);
+    if (options.signal?.aborted) throw failure("Structured output was aborted.", "aborted");
+    const unfinished = unfinishedResponse(result);
+    if (unfinished) throw failure(unfinished.message, unfinished.code);
+    return result;
   };
   const useResponseFormat = options.provider.capabilities.structuredOutput === true
     && isStrictNativeSchemaCompatible(jsonSchema);
@@ -316,7 +353,6 @@ const directStructured = async <TOutput extends z.ZodType>(
         schemaInstruction(jsonSchema, options.outputName),
       ].join("\n\n");
 
-  const attempts: GenerateResult[] = [];
   const first = await completeWithTiming({
     systemPrompt,
     messages: [inputMessage],
@@ -328,7 +364,6 @@ const directStructured = async <TOutput extends z.ZodType>(
     extraBody: options.extraBody,
     signal: options.signal,
   });
-  attempts.push(first);
 
   let parsed = parseStructuredOutput(options.output, textFromMessage(first.message));
   if (!parsed.ok) {
@@ -350,24 +385,11 @@ const directStructured = async <TOutput extends z.ZodType>(
       extraBody: options.extraBody,
       signal: options.signal,
     });
-    attempts.push(repair);
     parsed = parseStructuredOutput(options.output, textFromMessage(repair.message));
   }
 
-  const aggregate = aggregateFromTurns(attempts.map(resultToTurn));
-  aggregate.timing = buildLoopTiming({
-    wallMs: Math.max(0, Date.now() - startedAt),
-    generationMs,
-    toolExecutionMs: 0,
-    actionWaitMs: 0,
-  }, aggregate.usage);
-  if (!parsed.ok) {
-    throw new StructuredOutputError("Provider returned invalid structured output.", "invalid_output", {
-      attempts: attempts.length,
-      failure: parsed,
-      aggregate,
-    });
-  }
+  if (!parsed.ok) throw failure("Provider returned invalid structured output.", "invalid_output", { failure: parsed });
+  const aggregate = aggregateOfAttempts();
 
   const last = attempts[attempts.length - 1]!;
   const repaired = attempts.length > 1;
