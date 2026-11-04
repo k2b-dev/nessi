@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,20 +10,19 @@ const sourcePackage = JSON.parse(
   await readFile(resolve(packageRoot, "package.json"), "utf8"),
 );
 
-const providerExports = [
-  "openai-compatible-transcription",
-  "vllm-realtime-transcription",
-  "systemone-decision",
-  "cloudflare-decision",
-  "openai-compatible",
-  "openai",
-  "openrouter",
-  "vllm",
-  "ollama",
-  "anthropic",
-  "mistral",
-  "gemini",
-];
+// The published subpaths are the source manifest's, so a removed module cannot stay exported.
+const providerExports = Object.keys(sourcePackage.exports ?? {})
+  .filter((subpath) => subpath.startsWith("./ai/providers/"))
+  .map((subpath) => subpath.slice("./ai/providers/".length));
+
+for (const name of providerExports) {
+  for (const extension of [".js", ".d.ts"]) {
+    const target = resolve(distRoot, "ai/providers", `${name}${extension}`);
+    await access(target).catch(() => {
+      throw new Error(`Exported subpath ./ai/providers/${name} has no build output at ${target}.`);
+    });
+  }
+}
 
 const packageJson = {
   name: sourcePackage.name,
@@ -60,12 +59,10 @@ const packageJson = {
     "agent",
     "tools",
     "streaming",
-    "openai",
+    "openai-compatible",
     "openrouter",
-    "ollama",
-    "anthropic",
-    "gemini",
     "mistral",
+    "vllm",
   ],
   author: "Valentin Kolb",
   license: "MIT",

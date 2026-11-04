@@ -16,7 +16,7 @@ bun add @k2b/nessi
 
 ```ts
 import { nessi, defineTool, memoryStore } from "@k2b/nessi";
-import { ollama } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const weather = defineTool({
@@ -29,8 +29,10 @@ const weather = defineTool({
 
 const loop = nessi({
   loopId: crypto.randomUUID(),
-  provider: ollama("llama3.1", {
-    baseURL: "http://localhost:11434",
+  provider: openAICompatible({
+    name: "ollama",
+    model: "llama3.1",
+    baseURL: "http://localhost:11434/v1",
   }),
   systemPrompt: "You are concise.",
   input: "How is the weather in Berlin?",
@@ -214,11 +216,14 @@ of a streamed chat response:
 
 ```ts
 import { nessi } from "@k2b/nessi";
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const result = await nessi.structured({
-  provider: openrouter("openai/gpt-4.1-mini", {
+  provider: openAICompatible({
+    name: "openrouter",
+    model: "openai/gpt-4.1-mini",
+    baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
   }),
   input: "Extract a task card for: Ship the onboarding flow by Friday.",
@@ -261,9 +266,12 @@ the job of the full `nessi()` loop.
 ## Provider-only usage
 
 ```ts
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 
-const provider = openrouter("openai/gpt-4.1-mini", {
+const provider = openAICompatible({
+  name: "openrouter",
+  model: "openai/gpt-4.1-mini",
+  baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
@@ -344,7 +352,7 @@ the provider as a default, or per call on `complete()`, `stream()`, `nessi()` or
 is sent when neither is set, so the model keeps its own default.
 
 ```ts
-const provider = openai("gpt-6.1-sol", { reasoningEffort: "medium" });
+const provider = openAICompatible({ name: "openai", model: "gpt-6.1-sol", baseURL: "https://api.openai.com/v1", reasoningEffort: "medium" });
 
 const loop = nessi({ provider, systemPrompt, input, store, reasoningEffort: "high" });
 const quick = await provider.complete({ messages, reasoningEffort: "none" });
@@ -355,42 +363,25 @@ update. `"none"` turns reasoning off. Common levels are `"none"`, `"minimal"`,
 `"low"`, `"medium"`, `"high"`, `"xhigh"` and `"max"`. Which levels a model
 accepts is up to the model; unsupported values come back as provider errors.
 
-| Provider | Sent as |
-|---|---|
-| `openai`, `vllm`, `openAICompatible()` | `reasoning_effort` |
-| `openrouter` | `reasoning: { effort }` |
-| `ollama` | `think`; `"none"` sends `false` |
-| `anthropic` | `thinking: { type: "adaptive" }` plus `output_config.effort`; `"none"` sends `thinking: { type: "disabled" }` |
-| `gemini` | `thinkingConfig.thinkingLevel`; `"none"` sends `thinkingBudget: 0` |
-| `mistral` | `reasoning_effort` |
+`openAICompatible()` sends `reasoning_effort`; with
+`compat.reasoningFormat: "openrouter"` it sends `reasoning: { effort }`.
 
 Recent vLLM versions also pass the level to the chat template and turn off
 thinking for templates such as Qwen's when it is `"none"`. On older versions,
 use `extraBody: { chat_template_kwargs: { enable_thinking: false } }`.
-Anthropic models that cannot turn thinking off reject `"none"`; models before
-Claude 4.6 need the budget mode through
-`extraBody: { thinking: { type: "enabled", budget_tokens: 4096 } }` instead of
-`reasoningEffort`. Thinking counts against `max_tokens`, so the Anthropic
-default `maxOutputTokens` is 8192. Gemini 3 cannot turn thinking off completely;
-use `"minimal"` there. Gemini 2.5 takes token budgets instead of levels, which
-`extraBody: { generationConfig: { thinkingConfig: { thinkingBudget: 2048 } } }`
-sets. Gemini returns thought summaries only with
-`extraBody: { generationConfig: { thinkingConfig: { includeThoughts: true } } }`. Ollama
-models that only accept `think: true` or `false` need `extraBody: { think: true }`
-to turn thinking on.
 
-Thinking appears as `thinking` blocks. Some providers sign their reasoning or
+Thinking appears as `thinking` blocks. Some endpoints sign their reasoning or
 return it encrypted and require it back unchanged in later requests, especially
-during tool loops. Nessi keeps that data on the blocks (`signature`, `redacted`,
-and `details` for OpenRouter's `reasoning_details`) and records the producing
-provider in `message.provider`; each provider sends it back only to itself.
-This covers Anthropic thinking, Gemini thought signatures, Mistral thinking
-chunks and OpenRouter reasoning items. Store assistant messages as they are, including these
-fields, and keep history append-only.
+during tool loops. Nessi keeps that data on the blocks (`signature` for
+Mistral's typed `thinking` chunks, `details` for OpenRouter's
+`reasoning_details`) and records the producing provider's `name` in
+`message.provider`; it sends reasoning back only to the provider with that
+name, as typed chunks when `compat.thinkingFormat` is `"content_chunks"`.
+Store assistant messages as they are, including these fields, and keep history
+append-only.
 
-`disableReasoning` is deprecated. It keeps its original behavior: OpenAI-compatible
-providers send `reasoning_effort: "low"`, Gemini sets a zero thinking budget and
-other providers ignore it. It is ignored when the call sets `reasoningEffort`.
+`disableReasoning` is deprecated. It keeps its original behavior and sends
+`reasoning_effort: "low"`. It is ignored when the call sets `reasoningEffort`.
 
 ### Extra request fields
 
@@ -399,7 +390,9 @@ not model. Set it on the provider or per call; call values win. Plain objects
 merge deeply into what Nessi sends, other values replace it:
 
 ```ts
-const provider = vllm("Qwen/Qwen3-32B", {
+const provider = openAICompatible({
+  name: "vllm",
+  model: "Qwen/Qwen3-32B",
   baseURL: "http://localhost:8000/v1",
   extraBody: { chat_template_kwargs: { enable_thinking: false } },
 });
@@ -584,8 +577,7 @@ const loop = nessi({ provider, store, systemPrompt, input: userMessage, tools })
 ## Focused provider imports
 
 ```ts
-import { anthropic } from "@k2b/nessi/ai/providers/anthropic";
-import { openai } from "@k2b/nessi/ai/providers/openai";
+import { openAICompatible } from "@k2b/nessi/ai/providers/openai-compatible";
 import { openAICompatibleTranscription } from "@k2b/nessi/ai/providers/openai-compatible-transcription";
 import { systemOneDecision } from "@k2b/nessi/ai/providers/systemone-decision";
 ```
@@ -609,7 +601,7 @@ import { systemOneDecision } from "@k2b/nessi/ai/providers/systemone-decision";
 - Optional token-credit budgeting
 - Provider adapters with shared `complete()` and `stream()` APIs
 - Audio transcription through configurable OpenAI-compatible services
-- Native adapters for OpenAI, OpenRouter, vLLM, Ollama, Anthropic, Mistral, and Gemini
+- One chat adapter, `openAICompatible()`, with explicit options for OpenAI, OpenRouter, Mistral, vLLM, and other Chat Completions endpoints (see the skill's `providers.md`)
 
 ## Package layout
 

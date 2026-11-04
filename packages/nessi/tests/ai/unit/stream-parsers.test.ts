@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { ollama, openAICompatible } from "../../../src/ai/index.js";
+import { openAICompatible } from "../../../src/ai/index.js";
+import { endpoint } from "../helpers/endpoints.js";
 import { stubFetch, textResponse } from "../helpers/fixtures.js";
-import { parseNDJSON } from "../../../src/ai/shared/ndjson.js";
 import { MAX_STREAM_RECORD_CHARS, parseSSE, readRecordBatches, SSETimeoutError, StreamRecordTooLargeError } from "../../../src/ai/shared/sse.js";
 
 const encoder = new TextEncoder();
@@ -42,11 +42,6 @@ describe("stream timeouts", () => {
     expect(idle).toBeInstanceOf(SSETimeoutError);
     expect(idle).toMatchObject({ scope: "provider_idle" });
   });
-
-  it("parseNDJSON times out on a WHATWG reader instead of ending cleanly", async () => {
-    expect(await failure(parseNDJSON(stallingReader(), { firstByteMs: 5 }))).toMatchObject({ scope: "provider_first_byte" });
-    expect(await failure(parseNDJSON(stallingReader(['{"a":1}\n']), { idleMs: 5 }))).toMatchObject({ scope: "provider_idle" });
-  });
 });
 
 describe("record splitting", () => {
@@ -59,7 +54,7 @@ describe("record splitting", () => {
 
   it("finds a separator split across chunks", async () => {
     expect((await drain(parseSSE(readerFromChunks(["data: a\n", "\ndata: b\n", "\n"])))).map((event) => event.data)).toEqual(["a", "b"]);
-    expect(await drain(parseNDJSON(readerFromChunks(['{"a":1}', '\n{"b"', ":2}\n"])))).toEqual([{ a: 1 }, { b: 2 }]);
+    expect((await drain(readRecordBatches(readerFromChunks(['{"a":1}', '\n{"b"', ":2}\n"]), "\n"))).flat()).toEqual(['{"a":1}', '{"b":2}']);
   });
 
   it("matches a plain split for any chunking (seeded)", async () => {
@@ -115,7 +110,7 @@ describe("record splitting", () => {
         controller.close();
       },
     }).getReader();
-    expect(await drain(parseNDJSON(reader))).toEqual([{ a: "€ü" }, { b: "ß" }]);
+    expect((await drain(readRecordBatches(reader, "\n"))).flat()).toEqual(['{"a":"€ü"}', '{"b":"ß"}']);
   });
 
   it("stops a record that grows past the budget", async () => {
@@ -127,7 +122,7 @@ describe("record splitting", () => {
         controller.enqueue(chunk);
       },
     }).getReader();
-    for (const parse of [parseSSE, parseNDJSON]) {
+    for (const parse of [(source: ReturnType<typeof reader>) => parseSSE(source), (source: ReturnType<typeof reader>) => readRecordBatches(source, "\n")]) {
       pulls = 0;
       const error = await failure(parse(reader()));
       expect(error).toBeInstanceOf(StreamRecordTooLargeError);
@@ -145,9 +140,9 @@ describe("oversized records through adapters", () => {
     const huge = `data: {"choices":[{"delta":{"content":"${"x".repeat(MAX_STREAM_RECORD_CHARS)}"}}]}\n\n`;
     for (const provider of [
       openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }),
-      ollama("test", { baseURL: "https://example.test" }),
+      endpoint("mistral", { baseURL: "https://example.test" }),
     ]) {
-      stubFetch(() => textResponse(provider.name === "ollama" ? `{"message":{"content":"${"x".repeat(MAX_STREAM_RECORD_CHARS)}"}}\n` : huge, "text/event-stream"));
+      stubFetch(() => textResponse(huge, "text/event-stream"));
       const issues = [];
       for await (const event of provider.stream({ messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }] })) {
         if (event.type === "issue") issues.push(event.issue);

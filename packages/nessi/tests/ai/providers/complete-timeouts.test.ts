@@ -1,38 +1,20 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, completeFromStream, gemini, mistral, ollama, openAICompatible } from "../../../src/ai/index.js";
+import { completeFromStream, openAICompatible } from "../../../src/ai/index.js";
+import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider, ProviderTimeouts } from "../../../src/ai/types.js";
 import { stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-const providers: Array<{ name: string; create: (timeouts: ProviderTimeouts) => Provider; payload: unknown }> = [
-  {
-    name: "openai-compatible",
-    create: (timeouts) => openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts }),
-    payload: { choices: [{ message: { content: "Hello 🌊" }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } },
-  },
-  {
-    name: "anthropic",
-    create: (timeouts) => anthropic("test", { apiKey: "test", baseURL: "https://example.test", timeouts }),
-    payload: { id: "request-1", content: [{ type: "text", text: "Hello 🌊" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 3 } },
-  },
-  {
-    name: "mistral",
-    create: (timeouts) => mistral("test", { apiKey: "test", baseURL: "https://example.test", timeouts }),
-    payload: { choices: [{ message: { content: "Hello 🌊" }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } },
-  },
-  {
-    name: "gemini",
-    create: (timeouts) => gemini("test", { apiKey: "test", baseURL: "https://example.test", timeouts }),
-    payload: { candidates: [{ content: { parts: [{ text: "Hello 🌊" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 3, totalTokenCount: 13 } },
-  },
-  {
-    name: "ollama",
-    create: (timeouts) => ollama("test", { baseURL: "https://example.test", timeouts }),
-    payload: { message: { content: "Hello 🌊" }, done: true, done_reason: "stop", prompt_eval_count: 10, eval_count: 3 },
-  },
-];
+const chatPayload = { choices: [{ message: { content: "Hello 🌊" }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } };
+
+// Every endpoint variant runs on the same adapter; the matrix keeps each variant's settings covered.
+const providers: Array<{ name: string; create: (timeouts: ProviderTimeouts) => Provider; payload: unknown }> = ENDPOINT_NAMES.map((name) => ({
+  name,
+  create: (timeouts) => endpoint(name, { baseURL: "https://example.test", timeouts }),
+  payload: chatPayload,
+}));
 
 // A broken implementation must fail the test rather than leave the test runner hanging.
 async function bounded<T>(promise: Promise<T>, ms = 1000): Promise<T> {
@@ -58,9 +40,7 @@ for (const testCase of providers) {
       expect(result.message.content).toContainEqual({ type: "text", text: "Hello 🌊" });
       expect(result.finishReason).toBe("stop");
       expect(result.usage).toMatchObject({ input: 10, output: 3, total: 13 });
-      if (testCase.name === "openai-compatible" || testCase.name === "anthropic") {
-        expect(result.providerMeta?.requestId).toBe("request-1");
-      }
+      expect(result.providerMeta?.requestId).toBe("request-1");
     });
 
     it("bounds native generation with totalMs and aborts the request", async () => {
@@ -147,7 +127,7 @@ for (const testCase of providers) {
       const result = await bounded(testCase.create({ totalMs: 500, firstByteMs: 10, idleMs: 100 }).complete({ messages: [] }));
       expect(result.message.content).toContainEqual({ type: "text", text: "Hello 🌊" });
       expect(result.finishReason).toBe("stop");
-      if (testCase.name === "openai-compatible") expect(result.providerMeta?.requestId).toBe("request-1");
+      expect(result.providerMeta?.requestId).toBe("request-1");
     });
 
     for (const phase of ["headers", "body"] as const) {

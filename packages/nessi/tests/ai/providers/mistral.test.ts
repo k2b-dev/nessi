@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mistral } from "../../../src/ai/index.js";
+import { endpoint } from "../helpers/endpoints.js";
 import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
@@ -8,11 +8,11 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe("mistral provider", () => {
-  it("supports complete through the mistral preset", async () => {
+describe("openAICompatible with the Mistral settings", () => {
+  it("supports complete", async () => {
     stubFetch(async () => jsonResponse(await fixtureJson("../fixtures/mistral/complete.json")));
 
-    const provider = mistral("mistral-small-latest");
+    const provider = endpoint("mistral", { model: "mistral-small-latest" });
     const result = await provider.complete({ messages: [] });
     expect(result.finishReason).toBe("tool_use");
     expect(result.message.content.some((block) => block.type === "tool_call")).toBe(true);
@@ -25,7 +25,7 @@ describe("mistral provider", () => {
       return jsonResponse(await fixtureJson("../fixtures/mistral/complete.json"));
     });
 
-    const provider = mistral("mistral-small-latest", { temperature: 0.8 });
+    const provider = endpoint("mistral", { model: "mistral-small-latest", temperature: 0.8 });
     await provider.complete({ messages: [], temperature: 0 });
 
     expect(capturedBody.temperature).toBe(0);
@@ -39,7 +39,7 @@ describe("mistral provider", () => {
     });
 
     const schema = { type: "object", properties: { title: { type: "string" } }, required: ["title"] };
-    const provider = mistral("mistral-small-latest");
+    const provider = endpoint("mistral", { model: "mistral-small-latest" });
     await provider.complete({
       messages: [],
       responseFormat: { type: "json_schema", name: "card", schema },
@@ -57,7 +57,7 @@ describe("mistral provider", () => {
   const streamFixture = async (fixture: string) => {
     stubFetch(async () => textResponse(await fixtureText(fixture), "text/event-stream"));
     const events = [];
-    for await (const event of mistral("magistral-medium-latest").stream({ messages: [] })) events.push(event);
+    for await (const event of endpoint("mistral", { model: "magistral-medium-latest" }).stream({ messages: [] })) events.push(event);
     return events;
   };
 

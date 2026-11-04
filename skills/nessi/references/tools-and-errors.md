@@ -266,11 +266,11 @@ for await (const event of provider.stream({ messages })) {
 ```
 
 A stream record that is not a JSON object, or an error record inside the
-stream (`{ error: … }`, Mistral's `{ object: "error" }`, Anthropic's
+stream (`{ error: … }`, Mistral's `{ object: "error" }`, a proxy's
 `{ type: "error" }`), ends the stream with a `provider_error` issue, even when a
 normal end follows. Native `complete()` rejects HTTP 200 bodies that carry an
-error or no result, and a Gemini prompt block. An OpenAI `refusal` arrives as
-text and ends the response with stop reason `error`, like a content filter.
+error or no result. An OpenAI `refusal` arrives as text and ends the response
+with stop reason `error`, like a content filter.
 
 Malformed tool streams are not provider connection errors. Handle them separately
 if the UI wants to show model/tool-call diagnostics:
@@ -337,7 +337,10 @@ Do not call hosted providers directly from browser code with secret API keys. Pu
 
 ```ts
 // server route
-const provider = openrouter("openai/gpt-4.1-mini", {
+const provider = openAICompatible({
+  name: "openrouter",
+  model: "openai/gpt-4.1-mini",
+  baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 ```

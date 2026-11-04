@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, completeFromStream, gemini, mistral, ollama, openAICompatible, ProviderError } from "../../../src/ai/index.js";
+import { completeFromStream, openAICompatible, ProviderError } from "../../../src/ai/index.js";
+import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider } from "../../../src/ai/types.js";
 import { parseRetryAfterMs } from "../../../src/ai/shared/errors.js";
 import { stubFetch } from "../helpers/fixtures.js";
@@ -7,13 +8,10 @@ import { stubFetch } from "../helpers/fixtures.js";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-const providers: Array<{ name: string; create: () => Provider }> = [
-  { name: "openai-compatible", create: () => openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }) },
-  { name: "anthropic", create: () => anthropic("test", { apiKey: "test", baseURL: "https://example.test" }) },
-  { name: "mistral", create: () => mistral("test", { apiKey: "test", baseURL: "https://example.test" }) },
-  { name: "gemini", create: () => gemini("test", { apiKey: "test", baseURL: "https://example.test" }) },
-  { name: "ollama", create: () => ollama("test", { baseURL: "https://example.test" }) },
-];
+const providers: Array<{ name: string; create: () => Provider }> = ENDPOINT_NAMES.map((name) => ({
+  name,
+  create: () => endpoint(name, { baseURL: "https://example.test" }),
+}));
 
 const request = { messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "Hi" }] }] };
 
@@ -113,7 +111,7 @@ describe("ProviderError", () => {
     }), { preconnect: () => {} });
     for (const provider of [
       openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
-      ollama("test", { baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
+      endpoint("mistral", { baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
     ]) {
       const error = await rejection(completeFromStream(provider, request));
       expect(error).toBeInstanceOf(ProviderError);

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { z } from "zod";
 import { defineTool, nessi, StructuredOutputError } from "../src/index.js";
 import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
-import { openai, vllm } from "../src/ai/index.js";
+import { endpoint } from "./ai/helpers/endpoints.js";
 import type { GenerateResult, Provider } from "../src/ai/index.js";
 import type { ProviderRequest } from "../src/types.js";
 
@@ -83,8 +83,8 @@ describe("nessi.structured", () => {
     });
 
     it("marks vLLM guided decoding as not strict", () => {
-      expect(vllm("test").capabilities).toMatchObject({ structuredOutput: true, strictStructuredOutput: false });
-      expect(openai("test", { apiKey: "test" }).capabilities.strictStructuredOutput).toBeUndefined();
+      expect(endpoint("vllm", { model: "test" }).capabilities).toMatchObject({ structuredOutput: true, strictStructuredOutput: false });
+      expect(endpoint("openai", { model: "test" }).capabilities.strictStructuredOutput).toBeUndefined();
     });
   });
 

@@ -38,13 +38,6 @@ export type {
   TranscriptionResult,
 } from "./transcription.js";
 export { openAICompatible } from "./providers/openai-compatible.js";
-export { openai } from "./providers/openai.js";
-export { openrouter } from "./providers/openrouter.js";
-export { vllm } from "./providers/vllm.js";
-export { ollama } from "./providers/ollama.js";
-export { anthropic } from "./providers/anthropic.js";
-export { mistral } from "./providers/mistral.js";
-export { gemini } from "./providers/gemini.js";
 
 export type {
   AssistantBlockKind,

@@ -24,7 +24,7 @@ bun add @k2b/nessi
 Import providers from the `/ai` subpath:
 
 ```ts
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 ```
 
 Import agent-loop helpers from the package root:
@@ -42,7 +42,10 @@ import { mergeUsage, cloneLoopAggregate, mergeLoopAggregates } from "@k2b/nessi"
 Provider constructors use this shape:
 
 ```ts
-const provider = openrouter("openai/gpt-4.1-mini", {
+const provider = openAICompatible({
+  name: "openrouter",
+  model: "openai/gpt-4.1-mini",
+  baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 ```
@@ -51,7 +54,7 @@ const provider = openrouter("openai/gpt-4.1-mini", {
 
 ```ts
 import { nessi, defineTool, memoryStore } from "@k2b/nessi";
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const searchDocs = defineTool({
@@ -64,7 +67,10 @@ const searchDocs = defineTool({
 
 const loop = nessi({
   loopId: crypto.randomUUID(),
-  provider: openrouter("openai/gpt-4.1-mini", {
+  provider: openAICompatible({
+    name: "openrouter",
+    model: "openai/gpt-4.1-mini",
+    baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
   }),
   systemPrompt: "Answer from the available tools when useful.",
@@ -164,11 +170,14 @@ Use `nessi.structured()` when the app needs a typed object validated by Zod:
 
 ```ts
 import { nessi } from "@k2b/nessi";
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const result = await nessi.structured({
-  provider: openrouter("openai/gpt-4.1-mini", {
+  provider: openAICompatible({
+    name: "openrouter",
+    model: "openai/gpt-4.1-mini",
+    baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
   }),
   input: "Extract a task from: Ship the onboarding flow by Friday.",
@@ -230,9 +239,12 @@ for client tools, approvals, UI actions, or custom interactive tool bridges.
 ## One-shot completion
 
 ```ts
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 
-const provider = openrouter("openai/gpt-4.1-mini", {
+const provider = openAICompatible({
+  name: "openrouter",
+  model: "openai/gpt-4.1-mini",
+  baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
   temperature: 0.2,
 });
@@ -260,10 +272,12 @@ console.log(result.usage);
 ## Streaming text
 
 ```ts
-import { ollama } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 
-const provider = ollama("llama3.1", {
-  baseURL: "http://localhost:11434",
+const provider = openAICompatible({
+  name: "ollama",
+  model: "llama3.1",
+  baseURL: "http://localhost:11434/v1",
   temperature: 0,
 });
 
@@ -297,14 +311,17 @@ for await (const event of provider.stream({ messages })) {
 ## Minimal provider switcher
 
 ```ts
-import { ollama, openrouter, type Provider } from "@k2b/nessi/ai";
+import { openAICompatible, type Provider } from "@k2b/nessi/ai";
 
 function createProvider(name: "local" | "hosted"): Provider {
   if (name === "local") {
-    return ollama("llama3.1", { baseURL: "http://localhost:11434" });
+    return openAICompatible({ name: "ollama", model: "llama3.1", baseURL: "http://localhost:11434/v1" });
   }
 
-  return openrouter("openai/gpt-4.1-mini", {
+  return openAICompatible({
+    name: "openrouter",
+    model: "openai/gpt-4.1-mini",
+    baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
   });
 }

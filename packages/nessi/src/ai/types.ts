@@ -7,7 +7,7 @@ export type ContentPart = string | { type: "text"; text: string } | InputFilePar
 export type TextBlock = {
   type: "text";
   text: string;
-  /** Opaque provider signature for this text (Gemini). */
+  /** Opaque provider signature for this text; sent back unchanged. */
   signature?: string;
 };
 
@@ -15,9 +15,9 @@ export type ThinkingBlock = {
   type: "thinking";
   /** Readable reasoning; empty when the provider only returns a signature or encrypted data. */
   thinking: string;
-  /** Opaque signature that verifies this reasoning (Anthropic, Gemini, Mistral). */
+  /** Opaque signature that verifies this reasoning (Mistral `thinking` chunks); sent back unchanged. */
   signature?: string;
-  /** Encrypted reasoning without readable text (Anthropic `redacted_thinking`). */
+  /** Encrypted reasoning without readable text; sent back unchanged. */
   redacted?: string;
   /** Original OpenRouter-style `reasoning_details` items behind this block, sent back as they are. */
   details?: Record<string, unknown>[];
@@ -28,7 +28,7 @@ export type ToolCallBlock = {
   id: string;
   name: string;
   args: Record<string, unknown>;
-  /** Opaque provider signature for this call (Gemini). */
+  /** Opaque provider signature for this call; sent back unchanged. */
   signature?: string;
 };
 
@@ -75,8 +75,6 @@ export type Usage = {
   output: number;
   /** Part of `input` the provider read from its prompt cache. */
   cacheRead?: number;
-  /** Part of `input` the provider wrote to its prompt cache. */
-  cacheWrite?: number;
   total: number;
   creditsUsed?: number;
 };
@@ -175,12 +173,7 @@ export type ToolSpec = {
   inputSchema: unknown;
 };
 
-export type ProviderFamily =
-  | "openai-compatible"
-  | "ollama"
-  | "anthropic"
-  | "mistral"
-  | "gemini";
+export type ProviderFamily = "openai-compatible";
 
 export type ProviderCapabilities = {
   streaming: boolean;
@@ -227,8 +220,8 @@ export type GenerateRequest = {
   extraBody?: Record<string, unknown>;
   /**
    * @deprecated Use `reasoningEffort: "none"` (or a low level) instead. Kept with its original
-   * mapping: openai-compatible sends `reasoning_effort: "low"`, Gemini sets `thinkingBudget: 0`,
-   * other providers ignore it. Ignored when `reasoningEffort` is set on the request.
+   * mapping: `openAICompatible()` sends `reasoning_effort: "low"`. Ignored when `reasoningEffort`
+   * is set on the request.
    */
   disableReasoning?: boolean;
 };
@@ -322,8 +315,12 @@ export type OpenAICompat = {
   supportsUsageInStreaming?: boolean;
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
-  /** Defaults to details, then reasoning/reasoning_content. "text" prefers the text fields; "none" disables thinking. */
-  thinkingFormat?: "none" | "reasoning_details" | "text";
+  /**
+   * Defaults to details, then reasoning/reasoning_content. "text" prefers the text fields; "none" disables
+   * thinking. "content_chunks" replays the endpoint's own reasoning as typed `thinking` chunks in
+   * `content` (Mistral). Typed `text` and `thinking` chunks in responses are read in every mode.
+   */
+  thinkingFormat?: "none" | "reasoning_details" | "text" | "content_chunks";
   maxTokensField?: "max_tokens" | "max_completion_tokens";
   /** How `reasoningEffort` is sent: OpenAI's `reasoning_effort` (default) or OpenRouter's `reasoning: { effort }`. */
   reasoningFormat?: "reasoning_effort" | "openrouter";

@@ -1,2 +1,0 @@
-data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hi"},{"functionCall":{"name":"search","args":{"q":"x"}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2}}
-

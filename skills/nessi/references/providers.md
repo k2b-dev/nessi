@@ -1,9 +1,11 @@
 # Provider Setup
 
-Chat provider constructors return a `Provider` with the same consumer-facing interface:
+nessi has one chat adapter, `openAICompatible()`, for any endpoint that speaks
+OpenAI Chat Completions. Explicit `compat` options cover the differences between
+endpoints. It returns a `Provider`:
 
 ```ts
-const provider = providerFactory(model, options);
+const provider = openAICompatible({ name, model, baseURL, apiKey, compat });
 await provider.complete(request);
 for await (const event of provider.stream(request)) {}
 ```
@@ -146,139 +148,87 @@ const result = await provider.complete({
 
 Provider mappings:
 
-- OpenAI/OpenRouter/OpenAI-compatible: `response_format.json_schema`
-- vLLM: `structured_outputs.json`
-- Ollama: top-level `format` schema
-- Anthropic: `output_config.format`
-- Mistral: `response_format.json_schema`
-- Gemini: `generationConfig.responseMimeType` plus `responseJsonSchema`
+- `compat.structuredOutput: "response_format"` (OpenAI, OpenRouter, Mistral): `response_format.json_schema`, strict
+- `compat.structuredOutput: "vllm_structured_outputs"` (vLLM, Scaleway): `structured_outputs.json`, guided decoding
 
 ## Reasoning effort and extra request fields
 
-- `reasoningEffort` works on every provider option object and per call
-  (`complete`, `stream`, `nessi()`, `nessi.structured()`); the call wins, and
-  nothing is sent when unset. Values pass through unchanged; `"none"` is off.
-  Do not add model lists: unsupported levels come back as provider errors.
-- Wire mapping: OpenAI, vLLM and `openAICompatible()` send `reasoning_effort`;
-  OpenRouter sends `reasoning: { effort }`; Ollama sends `think` (`"none"` sends
-  `false`; boolean-only models need `extraBody: { think: true }`); Anthropic
-  sends adaptive thinking plus `output_config.effort` (`"none"` sends
-  `thinking: { type: "disabled" }`; pre-4.6 models need the budget mode via
-  `extraBody`); Gemini sends `thinkingConfig.thinkingLevel` (`"none"` sends
-  `thinkingBudget: 0`; Gemini 3 cannot fully disable, use `"minimal"`; 2.5
-  budgets and `includeThoughts` go through `extraBody.generationConfig`);
-  Mistral sends `reasoning_effort`.
-- Signed or encrypted reasoning stays on blocks (`signature`, `redacted`,
-  OpenRouter `details`; Gemini also signs text and tool calls) and
-  `message.provider` records the producer. Persist assistant
-  messages unchanged and append-only so the provider gets them back intact.
+- `reasoningEffort` works on the provider options and per call (`complete`,
+  `stream`, `nessi()`, `nessi.structured()`); the call wins, and nothing is
+  sent when unset. Values pass through unchanged; `"none"` is off. Do not add
+  model lists: unsupported levels come back as provider errors.
+- Wire format: `reasoning_effort` by default; `compat.reasoningFormat:
+  "openrouter"` sends `reasoning: { effort }`.
+- Signed or encrypted reasoning stays on blocks (`signature`, OpenRouter
+  `details`) and `message.provider` records the producer (`name`). Persist
+  assistant messages unchanged and append-only so the endpoint gets them back
+  intact.
 - `extraBody` (provider and call) merges extra fields into the request body;
-  plain objects merge deeply. Use it for parameters Nessi does not model, e.g.
+  plain objects merge deeply. Use it for parameters nessi does not model, e.g.
   vLLM `chat_template_kwargs: { enable_thinking: false }`.
 - `disableReasoning` is deprecated and keeps its old mapping; prefer
   `reasoningEffort: "none"`.
 
-## Hosted OpenAI
+## Chat endpoints
 
 ```ts
-import { openai } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 
-const provider = openai("gpt-4.1-mini", {
-  apiKey: process.env.OPENAI_API_KEY,
-  temperature: 0,
-});
-```
-
-Useful options:
-
-- `baseURL` for compatible gateways
-- `contextWindow` when the app wants overflow heuristics
-- `creditsPerInputToken` and `creditsPerOutputToken` for cost accounting
-- `normalizeToolCallIds: "strict9"` for providers that need short alphanumeric tool IDs
-- `timeouts.firstByteMs` for streaming startup, `timeouts.totalMs` for native `complete()`, and `timeouts.idleMs` for body-read gaps
-
-## OpenRouter
-
-```ts
-import { openrouter } from "@k2b/nessi/ai";
-
-const provider = openrouter("openai/gpt-4.1-mini", {
-  apiKey: process.env.OPENROUTER_API_KEY,
-  referer: "https://example.com",
-  title: "Example App",
-});
-```
-
-OpenRouter is a good default when the app needs model routing or easy model swapping. Reasoning-capable models can appear as normalized `thinking` blocks in stream events.
-
-## vLLM and custom OpenAI-compatible endpoints
-
-```ts
-import { vllm, openAICompatible } from "@k2b/nessi/ai";
-
-const localVllm = vllm("meta-llama/Llama-3.1-8B-Instruct", {
-  baseURL: "http://localhost:8000/v1",
-});
-
-const custom = openAICompatible({
-  name: "internal-gateway",
-  model: "company-model",
-  baseURL: "https://ai.example.com/v1",
-  apiKey: process.env.INTERNAL_AI_KEY,
+const provider = openAICompatible({
+  name: "mistral",
+  model: "mistral-medium-latest",
+  baseURL: "https://api.mistral.ai/v1",
+  apiKey: process.env.MISTRAL_API_KEY,
   compat: {
-    supportsUsageInStreaming: true,
+    toolCallIdPolicy: "strict9",
+    requiresToolResultName: true,
+    thinkingFormat: "content_chunks",
+    supportsUsageInStreaming: false,
     maxTokensField: "max_tokens",
+    structuredOutput: "response_format",
   },
 });
 ```
 
-Use `openAICompatible` when a gateway follows Chat Completions semantics closely enough but needs explicit compatibility flags.
+`name` labels errors and `message.provider`; reasoning is replayed only to the
+provider with the same `name`.
 
-Since `@k2b/nessi` 0.12.1, generic OpenAI-compatible streams recognize
-`delta.reasoning_content` without an extra compatibility setting. The default
-priority is readable `reasoning_details`, then `reasoning`, then
-`reasoning_content`. `thinkingFormat: "text"` prefers `reasoning`, then
-`reasoning_content`, with readable details as a fallback. Only one representation
-is emitted per frame, so parallel fields do not duplicate thinking text.
+| Endpoint | `baseURL` | `compat` |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1` | `maxTokensField: "max_completion_tokens"`, `structuredOutput: "response_format"`, `thinkingFormat: "none"` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `thinkingFormat: "reasoning_details"`, `reasoningFormat: "openrouter"`, `maxTokensField: "max_tokens"`, `structuredOutput: "response_format"`; optional `HTTP-Referer` and `X-Title` via `headers` |
+| Mistral | `https://api.mistral.ai/v1` | as in the example: 9-character tool call IDs, tool results with `name`, reasoning as typed `thinking` chunks, no `stream_options` |
+| vLLM, Scaleway | e.g. `http://localhost:8000/v1` | `structuredOutput: "vllm_structured_outputs"` (guided decoding, not strict), `maxTokensField: "max_tokens"`, `thinkingFormat: "text"` |
 
-Consume these through the existing `block_start` (`kind: "thinking"`),
-`block_delta`, and `block_end` events; see [Messages and streaming](messages-and-streaming.md).
-To hide thinking, explicitly set `thinkingFormat: "none"`. The `vllm()` preset
-still uses this opt-out; use `openAICompatible()` when you want thinking from a
-vLLM endpoint. Do not log reasoning content or raise timeouts to compensate for
-missing visible progress.
+Other Chat Completions endpoints work the same way, for example Ollama's
+`/v1`. Responses may carry `content` as a string or as typed `text` and
+`thinking` chunks; reasoning arrives from `reasoning_details`, `reasoning`, or
+`reasoning_content`, one representation per frame. Consume it through
+`block_start` (`kind: "thinking"`), `block_delta`, and `block_end`; set
+`thinkingFormat: "none"` to hide it. Do not log reasoning content.
 
-Use `timeouts` for vLLM/OpenAI-compatible requests that may stall:
+The other options:
 
-```ts
-const localVllm = vllm("Qwen/Qwen3-32B", {
-  baseURL: "http://localhost:8000/v1",
-  timeouts: {
-    firstByteMs: 30_000,
-    idleMs: 15_000,
-    totalMs: 120_000,
-  },
-});
-```
+- `contextWindow` when the app wants overflow heuristics.
+- `creditsPerInputToken` and `creditsPerOutputToken` for cost accounting.
+- `headers` for extra request headers.
+- `timeouts` as below.
 
-## Ollama
+Compared with the removed `mistral()` factory, the request no longer sets
+`parallel_tool_calls: true` (Mistral's default is the same; add it through
+`extraBody` if needed), and the deprecated `disableReasoning` sends
+`reasoning_effort: "low"` like every endpoint.
 
-```ts
-import { ollama } from "@k2b/nessi/ai";
-
-const provider = ollama("llama3.1", {
-  baseURL: "http://localhost:11434",
-  temperature: 0.2,
-});
-```
-
-Ollama is useful for local development and offline workflows. It streams NDJSON internally, but consumers still receive normalized `StreamEvent` values. It supports `timeouts.firstByteMs` for streaming startup, `timeouts.totalMs` for native `complete()`, and `timeouts.idleMs` for body-read gaps.
-
-Ollama's default context depends on the server's memory (4k to 256k). Set `contextWindow` to the size you want; Nessi then sends it as `options.num_ctx`, so Ollama and compaction use the same window. Without it, Nessi assumes 128k and sends nothing.
+**Migrating from 0.19:** the `openai()`, `openrouter()`, `vllm()`, `mistral()`,
+`anthropic()`, `gemini()`, and `ollama()` factories are gone. Use
+`openAICompatible()` with the settings above; `normalizeToolCallIds: "strict9"`
+becomes `compat.toolCallIdPolicy: "strict9"`. Anthropic, Gemini, and Ollama
+offer OpenAI-compatible endpoints; their native features (Anthropic or Gemini
+signed thinking, Ollama `num_ctx`) are not available there.
 
 ## Provider timeouts
 
-All chat adapters accept `timeouts` in provider options. Unset or non-positive
+`openAICompatible()` accepts `timeouts` in its options. Unset or non-positive
 values disable the corresponding timeout.
 
 - `stream()` and `completeFromStream()` use `firstByteMs` from request start
@@ -298,57 +248,8 @@ provider timeout. A native timeout rejects with a `ProviderError` carrying
 its reason is preserved. These options apply to chat providers, not the
 separate transcription or decision APIs.
 
-## Anthropic
-
-```ts
-import { anthropic } from "@k2b/nessi/ai";
-
-const provider = anthropic("claude-sonnet", {
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  maxOutputTokens: 8192,
-  reasoningEffort: "medium",
-});
-```
-
-`maxOutputTokens` defaults to 8192 because thinking counts against it.
-Anthropic uses native content blocks for tool use and thinking; signed and
-redacted thinking is sent back automatically. Consumers still receive normalized assistant content and `block_end` events for final `tool_call` blocks.
-
-## Mistral
-
-```ts
-import { mistral } from "@k2b/nessi/ai";
-
-const provider = mistral("mistral-small-latest", {
-  apiKey: process.env.MISTRAL_API_KEY,
-  normalizeToolCallIds: "strict9",
-});
-```
-
-Mistral looks OpenAI-like but has enough tool-call differences to use its native adapter. Keep tool-call IDs short if the backend requires it. Reasoning models return thinking chunks, which Nessi replays with their signatures in later turns.
-
-## Gemini
-
-```ts
-import { gemini } from "@k2b/nessi/ai";
-
-const provider = gemini("gemini-2.0-flash", {
-  apiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
-  maxOutputTokens: 1024,
-});
-```
-
-Gemini supports native multimodal input and function calls. Thought summaries
-become `thinking` blocks, and thought signatures are kept on their parts and
-sent back automatically, which Gemini 3 requires for function calling. Function
-calls from other providers' history get Gemini's documented placeholder
-signature.
-
 ## Provider selection heuristics
 
-- Choose `ollama` for local-only prototypes.
-- Choose `openrouter` for model choice and hosted routing.
-- Choose `openai` for direct OpenAI billing and behavior.
-- Choose `anthropic`, `gemini`, or `mistral` when the user explicitly wants that vendor's native API behavior.
-- Choose `vllm` for local or self-hosted OpenAI-compatible serving.
-- Choose `openAICompatible` for a custom gateway where explicit compatibility flags matter.
+- One adapter for every endpoint: pick the endpoint, then copy its `compat` row.
+- Prefer the endpoint's own base URL over a gateway unless the app needs routing.
+- Use `structuredOutput: "vllm_structured_outputs"` only for guided-decoding servers.

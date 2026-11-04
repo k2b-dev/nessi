@@ -1,6 +1,6 @@
 import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
-import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
+import { appendAssistantContentBlock, assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
 import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
@@ -31,7 +31,36 @@ type OAIMessage = {
   name?: string;
 };
 
-type OAIContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+type OAIContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } } | OAIThinkingChunk;
+
+/** Typed reasoning chunk some endpoints (Mistral Magistral) use inside `content`. */
+type OAIThinkingChunk = { type: "thinking"; thinking: Array<{ type: "text"; text: string }> | string; signature?: string };
+
+/** `content` as a string, or as typed text and reasoning chunks. */
+type OAIResponseContent = string | null | Array<{ type: "text"; text: string } | OAIThinkingChunk | { type: string }>;
+
+const chunkThinking = (chunk: OAIThinkingChunk) =>
+  typeof chunk.thinking === "string" ? chunk.thinking : chunk.thinking.map((part) => part.text ?? "").join("");
+
+/** Content blocks in response order; reasoning chunks keep their signature, or are dropped without `withThinking`. */
+const contentBlocks = (content: OAIResponseContent | undefined, withThinking: boolean): AssistantContentBlock[] => {
+  const blocks: AssistantContentBlock[] = [];
+  if (typeof content === "string") {
+    if (content) appendAssistantContentBlock(blocks, { type: "text", text: content });
+    return blocks;
+  }
+  for (const chunk of content ?? []) {
+    if (chunk.type === "text" && "text" in chunk) appendAssistantContentBlock(blocks, { type: "text", text: chunk.text });
+    else if (chunk.type === "thinking" && "thinking" in chunk && withThinking) {
+      appendAssistantContentBlock(blocks, {
+        type: "thinking",
+        thinking: chunkThinking(chunk),
+        ...(chunk.signature !== undefined ? { signature: chunk.signature } : {}),
+      });
+    }
+  }
+  return blocks;
+};
 
 type OAIToolCall = {
   id: string;
@@ -52,7 +81,7 @@ type SSEChunk = {
   choices?: Array<{
     index: number;
     delta: {
-      content?: string | null;
+      content?: OAIResponseContent;
       refusal?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
@@ -65,7 +94,7 @@ type SSEChunk = {
     };
     message?: {
       role?: string;
-      content?: string | null;
+      content?: OAIResponseContent;
       refusal?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
@@ -94,7 +123,7 @@ const normalizeToolCallIds = (mode: OpenAICompatibleConfig["compat"]) =>
 
 const mapFinishReason = (reason: string | null | undefined, hasTools: boolean): AssistantStopReason => {
   if (reason === "tool_calls") return "tool_use";
-  if (reason === "length") return "max_tokens";
+  if (reason === "length" || reason === "model_length") return "max_tokens";
   // The provider stopped the answer itself (filter or gateway error); its tool calls must not run.
   if (reason === "content_filter" || reason === "error") return "error";
   if (hasTools) return "tool_use";
@@ -156,11 +185,24 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
     }
 
     if (message.role === "assistant") {
+      // `content_chunks` endpoints want their own reasoning back as typed chunks next to the text.
+      const ownChunks = config.compat?.thinkingFormat === "content_chunks"
+        && message.provider === config.name
+        && message.content.some((block) => block.type === "thinking");
+      const chunks: OAIContentPart[] = [];
       let text = "";
       const toolCalls: OAIToolCall[] = [];
       for (const block of message.content) {
-        if (block.type === "text") text += block.text;
-        else if (block.type === "tool_call") {
+        if (block.type === "thinking" && ownChunks) {
+          chunks.push({
+            type: "thinking",
+            thinking: [{ type: "text", text: block.thinking }],
+            ...(block.signature !== undefined ? { signature: block.signature } : {}),
+          });
+        } else if (block.type === "text") {
+          text += block.text;
+          if (ownChunks && block.text) chunks.push({ type: "text", text: block.text });
+        } else if (block.type === "tool_call") {
           const mappedId = strictIds ? makeStrictId(block.id) : block.id;
           if (strictIds) {
             const queue = pendingToolIds.get(block.id) ?? [];
@@ -174,7 +216,7 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
           });
         }
       }
-      const out: OAIMessage = { role: "assistant", content: text || null };
+      const out: OAIMessage = { role: "assistant", content: ownChunks ? chunks : text || null };
       // Reasoning items go back unchanged, and only to the provider that produced them.
       const details = message.provider === config.name
         ? message.content.flatMap((block) => (block.type === "thinking" && block.details ? block.details : []))
@@ -237,8 +279,11 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
     throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
   }
   const message = choice?.message;
+  const withThinking = config.compat?.thinkingFormat !== "none";
+  const answer = contentBlocks(message?.content, withThinking);
   const thinking: AssistantContentBlock[] = [];
-  if (config.compat?.thinkingFormat !== "none") {
+  // Typed reasoning chunks carry the signature; the plain fields would only repeat their text.
+  if (withThinking && !answer.some((block) => block.type === "thinking")) {
     if (message?.reasoning_details?.length && config.compat?.thinkingFormat !== "text") {
       const details = message.reasoning_details;
       thinking.push({ type: "thinking", thinking: details.map(readableReasoning).join(""), details });
@@ -259,12 +304,12 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
   const refusal = message?.refusal || "";
   const finishReason = refusal ? "error" : mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
-  const text = `${message?.content ?? ""}${refusal}`;
+  if (refusal) appendAssistantContentBlock(answer, { type: "text", text: refusal });
 
   return {
     message: buildAssistantMessageFromContent(
       config.model,
-      [...thinking, ...(text ? [{ type: "text" as const, text }] : []), ...toolCalls],
+      [...thinking, ...answer, ...toolCalls],
       usage,
       finishReason,
       config.name,
@@ -482,14 +527,28 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
         const delta = choice.delta;
 
-        const thinking = thinkingFromDelta(delta, config);
+        // Typed reasoning chunks carry the signature; the plain fields would only repeat their text.
+        const chunkedThinking = Array.isArray(delta.content) && delta.content.some((chunk) => chunk.type === "thinking");
+        const thinking = chunkedThinking ? "" : thinkingFromDelta(delta, config);
         // Reasoning that arrives while a tool call is still streaming waits until the call is complete.
         if (thinking && pendingToolCalls.length > 0) deferredThinking += thinking;
         else if (thinking) yield { type: "thinking", delta: thinking };
         if (config.compat?.thinkingFormat !== "none" && config.compat?.thinkingFormat !== "text") {
           (delta.reasoning_details ?? []).forEach(collectReasoningDetail);
         }
-        if (delta.content) yield { type: "text", delta: delta.content };
+        if (typeof delta.content === "string") {
+          if (delta.content) yield { type: "text", delta: delta.content };
+        } else {
+          for (const chunk of delta.content ?? []) {
+            if (chunk.type === "text" && "text" in chunk) {
+              if (chunk.text) yield { type: "text", delta: chunk.text };
+            } else if (chunk.type === "thinking" && "thinking" in chunk && config.compat?.thinkingFormat !== "none") {
+              const text = chunkThinking(chunk);
+              if (text) yield { type: "thinking", delta: text };
+              if (chunk.signature) yield { type: "thinking", delta: "", signature: chunk.signature };
+            }
+          }
+        }
         if (delta.refusal) {
           refused = true;
           yield { type: "text", delta: delta.refusal };
