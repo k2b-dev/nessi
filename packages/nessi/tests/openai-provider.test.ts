@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { openai } from "../src/ai/providers/openai.js";
+import { endpoint } from "./ai/helpers/endpoints.js";
 import type { Message } from "../src/types.js";
 import { stubFetch } from "./ai/helpers/fixtures.js";
 
@@ -42,10 +42,10 @@ function sseResponse(dataLines: string[]): Response {
 
 describe("openai provider tool_call id compatibility", () => {
   it("normalizes tool_call ids when strict mode is enabled", async () => {
-    const provider = openai("mistral-small-latest", {
-      apiKey: "x",
+    const provider = endpoint("openai", {
+      model: "mistral-small-latest",
       baseURL: "https://api.mistral.ai/v1",
-      normalizeToolCallIds: "strict9",
+      compat: { toolCallIdPolicy: "strict9" },
     });
 
     const originalFetch = globalThis.fetch;
@@ -87,8 +87,8 @@ describe("openai provider tool_call id compatibility", () => {
   });
 
   it("keeps tool_call ids unchanged by default", async () => {
-    const provider = openai("gpt-4o-mini", {
-      apiKey: "x",
+    const provider = endpoint("openai", {
+      model: "gpt-4o-mini",
       baseURL: "https://api.openai.com/v1",
     });
 
@@ -129,10 +129,10 @@ describe("openai provider tool_call id compatibility", () => {
   });
 
   it("drops orphan tool_result messages in strict mode", async () => {
-    const provider = openai("mistral-small-latest", {
-      apiKey: "x",
+    const provider = endpoint("openai", {
+      model: "mistral-small-latest",
       baseURL: "https://api.mistral.ai/v1",
-      normalizeToolCallIds: "strict9",
+      compat: { toolCallIdPolicy: "strict9" },
     });
 
     const originalFetch = globalThis.fetch;
@@ -165,8 +165,8 @@ describe("openai provider tool_call id compatibility", () => {
   });
 
   it("marks 429 responses as retryable and parses top-level error messages", async () => {
-    const provider = openai("mistral-small-latest", {
-      apiKey: "x",
+    const provider = endpoint("openai", {
+      model: "mistral-small-latest",
       baseURL: "https://api.mistral.ai/v1",
     });
 

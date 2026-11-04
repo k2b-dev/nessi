@@ -1,3 +1,0 @@
-{"message":{"role":"assistant","content":"he"},"done":false}
-{"message":{"role":"assistant","content":"llo","tool_calls":[{"function":{"name":"search","arguments":{"q":"x"}}}]},"done":true,"prompt_eval_count":1,"eval_count":2}
-

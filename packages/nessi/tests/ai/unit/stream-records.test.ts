@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, gemini, mistral, ollama, openAICompatible, ProviderError } from "../../../src/ai/index.js";
+import { ProviderError } from "../../../src/ai/index.js";
+import { endpoint } from "../helpers/endpoints.js";
 import type { Provider, StreamEvent } from "../../../src/ai/types.js";
 import { jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
 
@@ -11,7 +12,6 @@ const request = { messages: [{ role: "user" as const, content: [{ type: "text" a
 const sse = (...records: Array<[string | undefined, unknown]>) => records
   .map(([event, data]) => `${event ? `event: ${event}\n` : ""}data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`)
   .join("");
-const ndjson = (...records: unknown[]) => records.map((record) => (typeof record === "string" ? record : JSON.stringify(record))).join("\n") + "\n";
 
 type Case = {
   name: string;
@@ -29,53 +29,38 @@ const chatStream = (bad: string | Record<string, unknown>) => textResponse(sse(
   [undefined, "[DONE]"],
 ), "text/event-stream");
 
+// Each endpoint variant with an in-band error record in the shape that endpoint (or a gateway in
+// front of it) sends.
 const cases: Case[] = [
   {
-    name: "openai-compatible",
-    create: () => openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }),
+    name: "openai",
+    create: () => endpoint("openai", { baseURL: "https://example.test" }),
     stream: chatStream,
     envelope: { error: { message: "rate limited", code: 429 } },
   },
   {
     name: "mistral",
-    create: () => mistral("test", { apiKey: "test", baseURL: "https://example.test" }),
+    create: () => endpoint("mistral", { baseURL: "https://example.test" }),
     stream: chatStream,
     envelope: { object: "error", message: "Service unavailable", type: "service_unavailable" },
   },
   {
-    name: "gemini",
-    create: () => gemini("test", { apiKey: "test", baseURL: "https://example.test" }),
-    stream: (bad) => textResponse(sse(
-      [undefined, { candidates: [{ content: { parts: [{ text: "Hello" }] } }] }],
-      [undefined, bad],
-      [undefined, { candidates: [{ content: { parts: [{ text: "!" }] }, finishReason: "STOP" }] }],
-    ), "text/event-stream"),
+    name: "openrouter",
+    create: () => endpoint("openrouter", { baseURL: "https://example.test" }),
+    stream: chatStream,
     envelope: { error: { code: 503, message: "The model is overloaded.", status: "UNAVAILABLE" } },
   },
   {
-    name: "anthropic",
-    create: () => anthropic("test", { apiKey: "test", baseURL: "https://example.test" }),
-    stream: (bad) => textResponse(sse(
-      ["message_start", { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 0 } } }],
-      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } }],
-      // Without an event name, as some proxies forward it.
-      [undefined, bad],
-      ["content_block_stop", { type: "content_block_stop", index: 0 }],
-      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }],
-      ["message_stop", { type: "message_stop" }],
-    ), "text/event-stream"),
-    envelope: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+    name: "vllm",
+    create: () => endpoint("vllm", { baseURL: "https://example.test" }),
+    stream: chatStream,
+    envelope: { error: "model runner has unexpectedly stopped" },
   },
   {
-    name: "ollama",
-    create: () => ollama("test", { baseURL: "https://example.test" }),
-    stream: (bad) => textResponse(ndjson(
-      { message: { content: "Hello" }, done: false },
-      bad,
-      { done: true, done_reason: "stop" },
-    ), "application/x-ndjson"),
-    envelope: { error: "model runner has unexpectedly stopped" },
+    name: "vllm behind a proxy",
+    create: () => endpoint("vllm", { baseURL: "https://example.test" }),
+    stream: chatStream,
+    envelope: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
   },
 ];
 
@@ -133,11 +118,8 @@ describe("success-shaped bodies without a result", () => {
     ["openai-compatible", cases[0]!.create, { choices: [{}] }],
     ["mistral", cases[1]!.create, { choices: [] }],
     ["mistral", cases[1]!.create, { choices: [{ index: 0 }] }],
-    ["gemini", cases[2]!.create, { candidates: [] }],
-    ["gemini", cases[2]!.create, { candidates: [{}] }],
-    ["anthropic", cases[3]!.create, { id: "msg_1" }],
-    ["ollama", cases[4]!.create, {}],
-    ["ollama", cases[4]!.create, { done: true }],
+    ["openrouter", cases[2]!.create, { choices: null }],
+    ["vllm", cases[3]!.create, { id: "chatcmpl-1" }],
   ] as const) {
     it(`${name} complete() rejects ${JSON.stringify(body)}`, async () => {
       stubFetch(() => jsonResponse(body));
@@ -148,22 +130,11 @@ describe("success-shaped bodies without a result", () => {
   it("keeps empty answers and content-free stops", async () => {
     stubFetch(() => jsonResponse({ choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "stop" }] }));
     expect((await cases[0]!.create().complete(request)).finishReason).toBe("stop");
-    stubFetch(() => jsonResponse({ candidates: [{ finishReason: "SAFETY" }] }));
+    // A filter stop may come without a message.
+    stubFetch(() => jsonResponse({ choices: [{ index: 0, finish_reason: "content_filter" }] }));
     expect((await cases[2]!.create().complete(request)).finishReason).toBe("error");
   });
 
-  it("anthropic complete() classifies error types like the stream", async () => {
-    for (const [type, retryable] of [["authentication_error", false], ["invalid_request_error", false], ["overloaded_error", true]] as const) {
-      stubFetch(() => jsonResponse({ type: "error", error: { type, message: "x" } }));
-      expect(await cases[3]!.create().complete(request).catch((caught: unknown) => caught)).toMatchObject({ retryable, code: type });
-    }
-  });
-
-  it("gemini complete() reports a blocked prompt like the stream does", async () => {
-    stubFetch(() => jsonResponse({ promptFeedback: { blockReason: "SAFETY" } }));
-    const error = await cases[2]!.create().complete(request).catch((caught: unknown) => caught);
-    expect(error).toMatchObject({ retryable: false, message: expect.stringContaining("SAFETY") });
-  });
 });
 
 describe("OpenAI refusals", () => {

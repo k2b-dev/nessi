@@ -480,7 +480,7 @@ describe("nessi loop lifecycle", () => {
   });
 
   it("does not run calls after Mistral reports finish_reason error", async () => {
-    const { mistral } = await import("../src/ai/index.js");
+    const { endpoint } = await import("./ai/helpers/endpoints.js");
     const originalFetch = globalThis.fetch;
     let executed = 0;
     const lookup = defineTool({ name: "lookup", description: "Lookup", inputSchema: z.object({}) })
@@ -492,7 +492,7 @@ describe("nessi loop lifecycle", () => {
         "data: [DONE]",
       ].join("\n\n") + "\n\n";
       stubFetch(async () => textResponse(sse, "text/event-stream"));
-      const events = await collect(nessi({ provider: mistral("m", { apiKey: "k" }), store: memoryStore(), systemPrompt: "sys", input: "go", tools: [lookup] }));
+      const events = await collect(nessi({ provider: endpoint("mistral", { model: "m" }), store: memoryStore(), systemPrompt: "sys", input: "go", tools: [lookup] }));
       expect(events.at(-1)).toMatchObject({ reason: "error" });
       expect(executed).toBe(0);
     } finally {

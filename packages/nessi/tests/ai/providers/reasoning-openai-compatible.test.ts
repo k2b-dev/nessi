@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openai, openAICompatible, openrouter, vllm } from "../../../src/ai/index.js";
+import { openAICompatible } from "../../../src/ai/index.js";
+import { endpoint } from "../helpers/endpoints.js";
 import type { GenerateRequest, Provider } from "../../../src/ai/index.js";
 import { stubFetch, textResponse } from "../helpers/fixtures.js";
 
@@ -45,13 +46,13 @@ describe("reasoning effort for OpenAI-compatible providers", () => {
   });
 
   it("passes unknown levels through unchanged", async () => {
-    for (const body of await sentBodies(openai("gpt-x", { apiKey: "k" }), { reasoningEffort: "xhigh" })) {
+    for (const body of await sentBodies(endpoint("openai", { model: "gpt-x" }), { reasoningEffort: "xhigh" })) {
       expect(body.reasoning_effort).toBe("xhigh");
     }
   });
 
   it("keeps the deprecated disableReasoning mapping", async () => {
-    for (const body of await sentBodies(vllm("m", { reasoningEffort: "high" }), { disableReasoning: true })) {
+    for (const body of await sentBodies(endpoint("vllm", { model: "m", reasoningEffort: "high" }), { disableReasoning: true })) {
       expect(body.reasoning_effort).toBe("low");
     }
   });
@@ -69,7 +70,7 @@ describe("reasoning effort for OpenAI-compatible providers", () => {
   });
 
   it("uses OpenRouter's reasoning object", async () => {
-    for (const body of await sentBodies(openrouter("anthropic/claude", { apiKey: "k", reasoningEffort: "high" }))) {
+    for (const body of await sentBodies(endpoint("openrouter", { model: "anthropic/claude", reasoningEffort: "high" }))) {
       expect(body.reasoning).toEqual({ effort: "high" });
       expect(body.reasoning_effort).toBeUndefined();
     }
@@ -85,7 +86,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
       bodies.push(JSON.parse(String(init?.body)));
       return textResponse(await fixtureText("../fixtures/openai/openrouter-reasoning-details.sse"), "text/event-stream");
     });
-    const provider = openrouter("anthropic/claude", { apiKey: "k" });
+    const provider = endpoint("openrouter", { model: "anthropic/claude" });
 
     const { message } = await completeFromStream(provider, { messages: [] });
 
@@ -123,12 +124,12 @@ describe("OpenRouter reasoning_details round-trip", () => {
     const { fixtureText } = await import("../helpers/fixtures.js");
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-late-signature.sse"), "text/event-stream"));
     const events = [];
-    for await (const event of openrouter("anthropic/claude", { apiKey: "k" }).stream({ messages: [] })) events.push(event);
+    for await (const event of endpoint("openrouter", { model: "anthropic/claude" }).stream({ messages: [] })) events.push(event);
 
     expect(events.some((event) => event.type === "issue")).toBe(false);
 
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-late-signature.sse"), "text/event-stream"));
-    const { message } = await completeFromStream(openrouter("anthropic/claude", { apiKey: "k" }), { messages: [] });
+    const { message } = await completeFromStream(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
     const calls = message.content.filter((block) => block.type === "tool_call");
     const details = message.content.flatMap((block) => (block.type === "thinking" ? block.details ?? [] : []));
     expect(calls).toEqual([{ type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } }]);
@@ -140,7 +141,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
     const { fixtureText } = await import("../helpers/fixtures.js");
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-interleaved.sse"), "text/event-stream"));
 
-    const { message } = await completeFromStream(openrouter("anthropic/claude", { apiKey: "k" }), { messages: [] });
+    const { message } = await completeFromStream(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
 
     expect(message.content).toEqual([
       { type: "tool_call", id: "call_1", name: "weather", args: { city: "Ulm" } },
@@ -157,7 +158,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
     const { fixtureText } = await import("../helpers/fixtures.js");
     stubFetch(async () => textResponse(await fixtureText("../fixtures/openai/openrouter-signature-after-answer.sse"), "text/event-stream"));
 
-    const { message } = await completeFromStream(openrouter("anthropic/claude", { apiKey: "k" }), { messages: [] });
+    const { message } = await completeFromStream(endpoint("openrouter", { model: "anthropic/claude" }), { messages: [] });
     const details = message.content.flatMap((block) => (block.type === "thinking" ? block.details ?? [] : []));
 
     expect(details).toEqual([{ type: "reasoning.text", text: "Greet.", signature: "sig", index: 0, format: "f1" }]);
@@ -165,7 +166,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
   });
 
   it("does not send reasoning items to another provider", async () => {
-    const bodies = await sentBodies(openai("gpt-x", { apiKey: "k" }), {
+    const bodies = await sentBodies(endpoint("openai", { model: "gpt-x" }), {
       messages: [
         { role: "user", content: ["Hi"] },
         {
@@ -189,7 +190,7 @@ describe("OpenRouter reasoning_details round-trip", () => {
       }],
     }), { headers: { "Content-Type": "application/json" } }));
 
-    const { message } = await openrouter("x/y", { apiKey: "k" }).complete({ messages: [] });
+    const { message } = await endpoint("openrouter", { model: "x/y" }).complete({ messages: [] });
 
     expect(message.content).toEqual([
       { type: "thinking", thinking: "Greeting.", details: [{ type: "reasoning.summary", summary: "Greeting.", index: 0 }] },

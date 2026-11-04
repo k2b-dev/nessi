@@ -234,16 +234,14 @@ type Usage = {
   output: number;
   total: number;
   cacheRead?: number;
-  cacheWrite?: number;
   creditsUsed?: number;
 };
 ```
 
-`input` counts every prompt token, including cached ones. `cacheRead` and
-`cacheWrite` are parts of `input` that the provider read from or wrote to its
-prompt cache (OpenAI-compatible `prompt_tokens_details.cached_tokens`; Anthropic
-`cache_read_input_tokens` and `cache_creation_input_tokens`). `creditsUsed`
-prices all of `input` at `creditsPerInputToken`.
+`input` counts every prompt token, including cached ones. `cacheRead` is the
+part of `input` the endpoint read from its prompt cache
+(`prompt_tokens_details.cached_tokens`). `creditsUsed` prices all of `input` at
+`creditsPerInputToken`.
 
 A `usage` event without `finishReason` is an interim count; the final one
 carries the finish reason.

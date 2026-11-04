@@ -4,13 +4,13 @@
     {
       "id": 1,
       "prompt": "Build a tiny Bun CLI that uses @k2b/nessi/ai with OpenRouter to summarize text passed as a command-line argument. It should print streamed text as it arrives and read OPENROUTER_API_KEY from the environment.",
-      "expected_output": "A concise Bun/TypeScript CLI using openrouter(model, options), provider.stream(), block_start/block_delta text handling, issue/usage event handling, and no browser-exposed secrets.",
+      "expected_output": "A concise Bun/TypeScript CLI using openAICompatible() with an OpenRouter base URL, provider.stream(), block_start/block_delta text handling, issue/usage event handling, and no browser-exposed secrets.",
       "files": []
     },
     {
       "id": 2,
       "prompt": "I want a provider switcher for my Node service: use local Ollama in development and OpenAI in production. Show the @k2b/nessi/ai code and keep the rest of the app independent from the provider choice.",
-      "expected_output": "A provider factory returning the shared Provider interface, using ollama(model, options) and openai(model, options), plus an example complete() call.",
+      "expected_output": "A provider factory returning the shared Provider interface, using openAICompatible() with per-endpoint compat settings (for example a local Ollama /v1 endpoint and OpenAI), plus an example complete() call.",
       "files": []
     },
     {
@@ -22,7 +22,7 @@
     {
       "id": 4,
       "prompt": "Build a tiny Bun agent with @k2b/nessi that stores history in memory, uses OpenRouter, defines one server-side search_docs tool with zod, and streams text to stdout.",
-      "expected_output": "A concise agent-loop example importing nessi, defineTool, and memoryStore from @k2b/nessi, importing openrouter from @k2b/nessi/ai, defining a zod-backed server tool, passing store: memoryStore() and tools to nessi(), and iterating loop events for block_start/block_delta text handling, issue handling, and loop_end.aggregate/loopId handling.",
+      "expected_output": "A concise agent-loop example importing nessi, defineTool, and memoryStore from @k2b/nessi, importing openAICompatible from @k2b/nessi/ai, defining a zod-backed server tool, passing store: memoryStore() and tools to nessi(), and iterating loop events for block_start/block_delta text handling, issue handling, and loop_end.aggregate/loopId handling.",
       "files": []
     },
     {

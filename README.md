@@ -27,9 +27,12 @@ query decision models such as Clef through the System One API. See
 
 ```ts
 import { nessi, memoryStore } from "@k2b/nessi";
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 
-const provider = openrouter("openai/gpt-4.1-mini", {
+const provider = openAICompatible({
+  name: "openrouter",
+  model: "openai/gpt-4.1-mini",
+  baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 

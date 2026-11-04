@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { z } from "zod";
-import { anthropic, gemini, mistral, ollama, openAICompatible } from "../src/ai/index.js";
+import { endpoint, ENDPOINT_NAMES } from "./ai/helpers/endpoints.js";
 import type { Provider, StreamEvent } from "../src/ai/types.js";
 import { nessi } from "../src/nessi.js";
 import { memoryStore } from "../src/stores.js";
@@ -23,7 +23,6 @@ async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
 const sse = (...records: Array<[string | undefined, unknown]>) => records
   .map(([event, data]) => `${event ? `event: ${event}\n` : ""}data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`)
   .join("");
-const ndjson = (...records: unknown[]) => records.map((record) => `${JSON.stringify(record)}\n`).join("");
 
 const chatCompletion = (args: unknown) => ({
   choices: [{
@@ -42,14 +41,6 @@ const chatAnswer = () => sse(
   [undefined, { choices: [{ delta: {}, finish_reason: "stop" }] }],
   [undefined, "[DONE]"],
 );
-const anthropicStream = (block: unknown, stopReason: string) => sse(
-  ["message_start", { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 0 } } }],
-  ["content_block_start", { type: "content_block_start", index: 0, content_block: block }],
-  ["content_block_stop", { type: "content_block_stop", index: 0 }],
-  ["message_delta", { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 1 } }],
-  ["message_stop", { type: "message_stop" }],
-);
-
 type ArgumentsCase = {
   name: string;
   create: () => Provider;
@@ -60,60 +51,23 @@ type ArgumentsCase = {
   answer: () => Response;
 };
 
+// Every endpoint variant, plus a server that sends arguments as objects instead of JSON strings.
 const cases: ArgumentsCase[] = [
-  {
-    name: "openai-compatible",
-    create: () => openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }),
+  ...ENDPOINT_NAMES.map((name) => ({
+    name,
+    create: () => endpoint(name, { baseURL: "https://example.test" }),
     valid: '{"target":"one"}',
+    native: chatCompletion,
+    stream: (args: unknown) => textResponse(chatStream(args), "text/event-stream"),
+    answer: () => textResponse(chatAnswer(), "text/event-stream"),
+  })),
+  {
+    name: "vllm with object arguments",
+    create: () => endpoint("vllm", { baseURL: "https://example.test" }),
+    valid: { target: "one" },
     native: chatCompletion,
     stream: (args) => textResponse(chatStream(args), "text/event-stream"),
     answer: () => textResponse(chatAnswer(), "text/event-stream"),
-  },
-  {
-    name: "mistral",
-    create: () => mistral("test", { apiKey: "test", baseURL: "https://example.test" }),
-    valid: '{"target":"one"}',
-    native: chatCompletion,
-    stream: (args) => textResponse(chatStream(args), "text/event-stream"),
-    answer: () => textResponse(chatAnswer(), "text/event-stream"),
-  },
-  {
-    name: "anthropic",
-    create: () => anthropic("test", { apiKey: "test", baseURL: "https://example.test" }),
-    valid: { target: "one" },
-    native: (input) => ({ content: [{ type: "tool_use", id: "toolu_1", name: "wipe", input }], stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 } }),
-    stream: (input) => textResponse(anthropicStream({ type: "tool_use", id: "toolu_1", name: "wipe", input }, "tool_use"), "text/event-stream"),
-    answer: () => textResponse(sse(
-      ["message_start", { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 0 } } }],
-      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Stopped." } }],
-      ["content_block_stop", { type: "content_block_stop", index: 0 }],
-      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }],
-      ["message_stop", { type: "message_stop" }],
-    ), "text/event-stream"),
-  },
-  {
-    name: "gemini",
-    create: () => gemini("test", { apiKey: "test", baseURL: "https://example.test" }),
-    valid: { target: "one" },
-    native: (args) => ({ candidates: [{ content: { parts: [{ functionCall: { name: "wipe", args } }] }, finishReason: "STOP" }] }),
-    stream: (args) => textResponse(sse(
-      [undefined, { candidates: [{ content: { parts: [{ functionCall: { name: "wipe", args } }] }, finishReason: "STOP" }] }],
-    ), "text/event-stream"),
-    answer: () => textResponse(sse(
-      [undefined, { candidates: [{ content: { parts: [{ text: "Stopped." }] }, finishReason: "STOP" }] }],
-    ), "text/event-stream"),
-  },
-  {
-    name: "ollama",
-    create: () => ollama("test", { baseURL: "https://example.test" }),
-    valid: { target: "one" },
-    native: (args) => ({ message: { content: "", tool_calls: [{ function: { name: "wipe", arguments: args } }] }, done: true, done_reason: "stop" }),
-    stream: (args) => textResponse(ndjson(
-      { message: { content: "", tool_calls: [{ function: { name: "wipe", arguments: args } }] }, done: false },
-      { done: true, done_reason: "stop" },
-    ), "application/x-ndjson"),
-    answer: () => textResponse(ndjson({ message: { content: "Stopped." }, done: false }, { done: true, done_reason: "stop" }), "application/x-ndjson"),
   },
 ];
 

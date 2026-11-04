@@ -1,16 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import {
-  anthropic,
-  cloudflareDecision,
-  gemini,
-  mistral,
-  ollama,
-  openAICompatible,
-  openAICompatibleTranscription,
-  systemOneDecision,
-} from "../../../src/ai/index.js";
+import { cloudflareDecision, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
+import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider, StreamEvent } from "../../../src/ai/types.js";
-import { jsonResponse, stubFetch } from "../helpers/fixtures.js";
 
 const SECRET = "synthetic-credential";
 
@@ -51,16 +42,11 @@ it("the redirect harness forwards custom headers when fetch follows redirects", 
   expect(leaked).toEqual([expect.objectContaining({ "x-api-key": SECRET })]);
 });
 
-const providers: Array<{ name: string; create: (baseURL: string) => Provider }> = [
-  { name: "anthropic", create: (baseURL) => anthropic("test", { apiKey: SECRET, baseURL }) },
-  { name: "mistral", create: (baseURL) => mistral("test", { apiKey: SECRET, baseURL }) },
-  { name: "gemini", create: (baseURL) => gemini("test", { apiKey: SECRET, baseURL }) },
-  { name: "ollama", create: (baseURL) => ollama("test", { baseURL }) },
-  {
-    name: "openai-compatible with custom headers",
-    create: (baseURL) => openAICompatible({ name: "test", model: "test", baseURL, apiKey: SECRET, headers: { "x-api-key": SECRET } }),
-  },
-];
+// Every endpoint variant, each also with a custom credential header that `fetch` would forward.
+const providers: Array<{ name: string; create: (baseURL: string) => Provider }> = ENDPOINT_NAMES.map((name) => ({
+  name: `openai-compatible (${name})`,
+  create: (baseURL: string) => endpoint(name, { baseURL, apiKey: SECRET, headers: { "x-api-key": SECRET } }),
+}));
 
 const request = { messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "Hi" }] }] };
 
@@ -97,27 +83,5 @@ describe("provider redirects", () => {
     await expect(cloudflareDecision("clef", { baseURL: cloudflare.baseURL, accountId: "a", apiToken: SECRET }).decide({ state: "x", questions }))
       .rejects.toThrow();
     expect([...systemOne.leaked, ...cloudflare.leaked]).toEqual([]);
-  });
-});
-
-describe("gemini API key", () => {
-  it("is sent in the x-goog-api-key header and never in the URL", async () => {
-    const seen: Array<{ url: string; key: string | null }> = [];
-    stubFetch((input, init) => {
-      seen.push({ url: String(input), key: new Headers(init?.headers).get("x-goog-api-key") });
-      return String(input).includes("alt=sse")
-        ? new Response('data: {"candidates":[{"content":{"parts":[{"text":"Hi"}]},"finishReason":"STOP"}]}\n\n', {
-          headers: { "Content-Type": "text/event-stream" },
-        })
-        : jsonResponse({ candidates: [{ content: { parts: [{ text: "Hi" }] }, finishReason: "STOP" }] });
-    });
-    const provider = gemini("test", { apiKey: SECRET, baseURL: "https://example.test" });
-    await provider.complete(request);
-    for await (const _event of provider.stream(request)) { /* drain */ }
-
-    expect(seen).toEqual([
-      { url: "https://example.test/test:generateContent", key: SECRET },
-      { url: "https://example.test/test:streamGenerateContent?alt=sse", key: SECRET },
-    ]);
   });
 });

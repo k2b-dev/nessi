@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, gemini, mistral, ollama, openAICompatible, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
+import { openAICompatible, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
+import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider, ProviderTimeouts, StreamEvent } from "../../../src/ai/types.js";
 import { ERROR_BODY_LIMIT_BYTES, readErrorBody } from "../../../src/ai/shared/errors.js";
 import { stubFetch } from "../helpers/fixtures.js";
@@ -7,13 +8,10 @@ import { stubFetch } from "../helpers/fixtures.js";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-const providers: Array<{ name: string; create: (timeouts?: ProviderTimeouts) => Provider }> = [
-  { name: "openai-compatible", create: (timeouts) => openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts }) },
-  { name: "anthropic", create: (timeouts) => anthropic("test", { apiKey: "test", baseURL: "https://example.test", timeouts }) },
-  { name: "mistral", create: (timeouts) => mistral("test", { apiKey: "test", baseURL: "https://example.test", timeouts }) },
-  { name: "gemini", create: (timeouts) => gemini("test", { apiKey: "test", baseURL: "https://example.test", timeouts }) },
-  { name: "ollama", create: (timeouts) => ollama("test", { baseURL: "https://example.test", timeouts }) },
-];
+const providers: Array<{ name: string; create: (timeouts?: ProviderTimeouts) => Provider }> = ENDPOINT_NAMES.map((name) => ({
+  name,
+  create: (timeouts?: ProviderTimeouts) => endpoint(name, { baseURL: "https://example.test", timeouts }),
+}));
 
 const request = { messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "Hi" }] }] };
 const encoder = new TextEncoder();

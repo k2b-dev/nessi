@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { completeFromStream, mistral } from "../../../src/ai/index.js";
+import { completeFromStream } from "../../../src/ai/index.js";
+import { endpoint } from "../helpers/endpoints.js";
 import type { AssistantMessage, GenerateRequest } from "../../../src/ai/index.js";
 import { fixtureText, jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
 
@@ -8,21 +9,21 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const sentBody = async (request: Partial<GenerateRequest>, options: Parameters<typeof mistral>[1] = {}) => {
+const sentBody = async (request: Partial<GenerateRequest>, options: Parameters<typeof endpoint>[1] = {}) => {
   let body: Record<string, unknown> = {};
   stubFetch(async (_input, init) => {
     body = JSON.parse(String(init?.body));
     return jsonResponse({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }] });
   });
-  await mistral("mistral-medium", { apiKey: "k", ...options }).complete({ messages: [], ...request });
+  await endpoint("mistral", { model: "mistral-medium", ...options }).complete({ messages: [], ...request });
   return body;
 };
 
-describe("mistral reasoning", () => {
+describe("Mistral reasoning through openAICompatible", () => {
   it("streams thinking with its signature before the answer", async () => {
     stubFetch(async () => textResponse(await fixtureText("../fixtures/mistral/reasoning-signed.sse"), "text/event-stream"));
 
-    const { message } = await completeFromStream(mistral("mistral-medium", { apiKey: "k" }), { messages: [] });
+    const { message } = await completeFromStream(endpoint("mistral", { model: "mistral-medium" }), { messages: [] });
 
     expect(message.provider).toBe("mistral");
     expect(message.content).toEqual([
@@ -45,7 +46,7 @@ describe("mistral reasoning", () => {
       }],
     }));
 
-    const { message } = await mistral("mistral-medium", { apiKey: "k" }).complete({ messages: [] });
+    const { message } = await endpoint("mistral", { model: "mistral-medium" }).complete({ messages: [] });
 
     expect(message.content).toEqual([{ type: "thinking", thinking: "Hmm.", signature: "s" }, { type: "text", text: "Yes." }]);
   });
@@ -79,6 +80,5 @@ describe("mistral reasoning", () => {
     expect(await sentBody({})).not.toHaveProperty("reasoning_effort");
     expect((await sentBody({}, { reasoningEffort: "high" })).reasoning_effort).toBe("high");
     expect((await sentBody({ reasoningEffort: "none" }, { reasoningEffort: "high" })).reasoning_effort).toBe("none");
-    expect(await sentBody({ disableReasoning: true })).not.toHaveProperty("reasoning_effort");
   });
 });

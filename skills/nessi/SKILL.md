@@ -1,6 +1,6 @@
 ---
 name: nessi
-description: "Build applications with the @k2b/nessi TypeScript library. Use for creating or modifying a CLI, backend endpoint, service, prototype, provider switcher, streaming UI adapter, tool-calling workflow, structured-output task, agent loop, or AI integration using @k2b/nessi. Trigger for questions about root nessi(), nessi.structured(), @k2b/nessi/ai complete(), stream(), provider setup, audio transcription, speech-to-text, live or realtime transcription, Voxtral, decision models, System One, Clef, typed routing or triage decisions, Scaleway, responseFormat, OpenAI/OpenRouter/vLLM/Ollama/Anthropic/Mistral/Gemini, message formats, multimodal input, canonical block streaming events, issue events for malformed tool streams, dynamic per-turn tool resolution, tool call IDs, loopId correlation, loop_end.aggregate metadata, loop-level stats, local or durable steering, historical tool results, context growth, tool execution events, usage accounting, generation options, provider timeouts, API keys, local models, context-overflow handling, or when choosing whether the provider-only /ai layer is enough versus the root APIs."
+description: "Build applications with the @k2b/nessi TypeScript library. Use for creating or modifying a CLI, backend endpoint, service, prototype, provider switcher, streaming UI adapter, tool-calling workflow, structured-output task, agent loop, or AI integration using @k2b/nessi. Trigger for questions about root nessi(), nessi.structured(), @k2b/nessi/ai complete(), stream(), provider setup, audio transcription, speech-to-text, live or realtime transcription, Voxtral, decision models, System One, Clef, typed routing or triage decisions, Scaleway, responseFormat, the openAICompatible() adapter and its endpoint options for OpenAI, OpenRouter, Mistral, vLLM, Scaleway and other Chat Completions endpoints, message formats, multimodal input, canonical block streaming events, issue events for malformed tool streams, dynamic per-turn tool resolution, tool call IDs, loopId correlation, loop_end.aggregate metadata, loop-level stats, local or durable steering, historical tool results, context growth, tool execution events, usage accounting, generation options, provider timeouts, API keys, local models, context-overflow handling, or when choosing whether the provider-only /ai layer is enough versus the root APIs."
 ---
 
 # @k2b/nessi Consumer Skill
@@ -14,7 +14,7 @@ scope.
 ## First move
 
 1. Identify the application shape: CLI, backend route, browser adapter, service job, test fixture, or agent prototype.
-2. Identify the provider family: hosted API, OpenRouter aggregation, local Ollama/vLLM, or a custom OpenAI-compatible endpoint.
+2. Identify the endpoint (OpenAI, OpenRouter, Mistral, vLLM/Scaleway, or another Chat Completions server) and take its `compat` settings from `references/providers.md`; `openAICompatible()` is the only chat adapter.
 3. Decide whether the user needs only the provider layer or the full agent loop:
    - Use `@k2b/nessi/ai` for provider calls, streaming, message normalization, tool-call extraction, and usage data.
    - For audio transcription, use `openAICompatibleTranscription()` from `/ai` and read `references/providers.md`. It returns a separate `TranscriptionProvider` with `transcribe()`. For live transcription while the user speaks, use `vllmRealtimeTranscription()` and its `stream()`. For typed routing or triage decisions, use `systemOneDecision()` or `cloudflareDecision()` and `decide()`.
@@ -96,7 +96,7 @@ import {
 Focused provider imports are also available:
 
 ```ts
-import { openrouter } from "@k2b/nessi/ai/providers/openrouter";
+import { openAICompatible } from "@k2b/nessi/ai/providers/openai-compatible";
 ```
 
 Common request shape:
@@ -116,11 +116,14 @@ Common structured-output shape:
 
 ```ts
 import { nessi } from "@k2b/nessi";
-import { openrouter } from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const result = await nessi.structured({
-  provider: openrouter("openai/gpt-4.1-mini", {
+  provider: openAICompatible({
+    name: "openrouter",
+    model: "openai/gpt-4.1-mini",
+    baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
   }),
   input: "Extract a task from: Ship onboarding by Friday.",

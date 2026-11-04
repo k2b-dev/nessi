@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, openAICompatible } from "../../../src/ai/index.js";
+import { openAICompatible } from "../../../src/ai/index.js";
 import type { RawStreamEvent, StreamEvent } from "../../../src/ai/types.js";
 import { normalizeProviderStream } from "../../../src/ai/shared/tool-stream-normalizer.js";
 import { mergeUsage } from "../../../src/aggregates.js";
@@ -75,43 +75,9 @@ describe("cache usage", () => {
     expect(events.at(-1)).toMatchObject({ type: "usage", usage: { input: 100, cacheRead: 80, total: 105 } });
   });
 
-  const anthropicUsage = { input_tokens: 10, cache_read_input_tokens: 50, cache_creation_input_tokens: 20 };
-  const expected = { input: 80, output: 4, total: 84, cacheRead: 50, cacheWrite: 20 };
 
-  it("counts Anthropic cache reads and writes into input once", async () => {
-    stubFetch(() => jsonResponse({
-      id: "msg_1",
-      content: [{ type: "text", text: "ok" }],
-      stop_reason: "end_turn",
-      usage: { ...anthropicUsage, output_tokens: 4 },
-    }));
-    const provider = anthropic("test", { apiKey: "test", baseURL: "https://example.test" });
-    expect((await provider.complete(request)).usage).toMatchObject(expected);
-
-    stubFetch(() => textResponse(sse(
-      ["message_start", { type: "message_start", message: { usage: { ...anthropicUsage, output_tokens: 1 } } }],
-      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } }],
-      ["content_block_stop", { type: "content_block_stop", index: 0 }],
-      // A later event repeats only some counters; the cache counters from message_start stay.
-      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }],
-      ["message_stop", { type: "message_stop" }],
-    ), "text/event-stream"));
-    const events = await collect(provider.stream(request));
-    expect(events.at(-1)).toMatchObject({ type: "usage", usage: expected });
-
-    // Cumulative deltas that repeat every counter replace them, a zero included.
-    stubFetch(() => textResponse(sse(
-      ["message_start", { type: "message_start", message: { usage: { ...anthropicUsage, output_tokens: 1 } } }],
-      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { ...anthropicUsage, cache_creation_input_tokens: 0, output_tokens: 4 } }],
-      ["message_stop", { type: "message_stop" }],
-    ), "text/event-stream"));
-    const repeated = await collect(provider.stream(request));
-    expect(repeated.at(-1)).toMatchObject({ type: "usage", usage: { input: 60, output: 4, total: 64, cacheRead: 50, cacheWrite: 0 } });
-  });
-
-  it("adds cache writes across turns", () => {
-    expect(mergeUsage({ input: 10, output: 1, total: 11, cacheWrite: 4 }, { input: 5, output: 1, total: 6, cacheWrite: 2, cacheRead: 3 }))
-      .toEqual({ input: 15, output: 2, total: 17, cacheWrite: 6, cacheRead: 3 });
+  it("adds cache reads across turns", () => {
+    expect(mergeUsage({ input: 10, output: 1, total: 11 }, { input: 5, output: 1, total: 6, cacheRead: 3 }))
+      .toEqual({ input: 15, output: 2, total: 17, cacheRead: 3 });
   });
 });

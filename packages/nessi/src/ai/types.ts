@@ -75,8 +75,6 @@ export type Usage = {
   output: number;
   /** Part of `input` the provider read from its prompt cache. */
   cacheRead?: number;
-  /** Part of `input` the provider wrote to its prompt cache. */
-  cacheWrite?: number;
   total: number;
   creditsUsed?: number;
 };
@@ -175,12 +173,7 @@ export type ToolSpec = {
   inputSchema: unknown;
 };
 
-export type ProviderFamily =
-  | "openai-compatible"
-  | "ollama"
-  | "anthropic"
-  | "mistral"
-  | "gemini";
+export type ProviderFamily = "openai-compatible";
 
 export type ProviderCapabilities = {
   streaming: boolean;
@@ -322,8 +315,12 @@ export type OpenAICompat = {
   supportsUsageInStreaming?: boolean;
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
-  /** Defaults to details, then reasoning/reasoning_content. "text" prefers the text fields; "none" disables thinking. */
-  thinkingFormat?: "none" | "reasoning_details" | "text";
+  /**
+   * Defaults to details, then reasoning/reasoning_content. "text" prefers the text fields; "none" disables
+   * thinking. "content_chunks" replays the endpoint's own reasoning as typed `thinking` chunks in
+   * `content` (Mistral). Typed `text` and `thinking` chunks in responses are read in every mode.
+   */
+  thinkingFormat?: "none" | "reasoning_details" | "text" | "content_chunks";
   maxTokensField?: "max_tokens" | "max_completion_tokens";
   /** How `reasoningEffort` is sent: OpenAI's `reasoning_effort` (default) or OpenRouter's `reasoning: { effort }`. */
   reasoningFormat?: "reasoning_effort" | "openrouter";

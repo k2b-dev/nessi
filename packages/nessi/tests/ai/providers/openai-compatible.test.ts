@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { completeFromStream, openAICompatible, openrouter, vllm } from "../../../src/ai/index.js";
+import { completeFromStream, openAICompatible } from "../../../src/ai/index.js";
+import { endpoint } from "../helpers/endpoints.js";
 import { expectProviderContract } from "../contracts/provider-contract.js";
 import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
 import type { OpenAICompat } from "../../../src/ai/types.js";
@@ -203,7 +204,7 @@ describe("openAICompatible provider", () => {
   });
 
   it("maps openrouter reasoning details to thinking events", async () => {
-    const provider = openrouter("openai/gpt-4.1-mini", { apiKey: "x", baseURL: "https://openrouter.ai/api/v1" });
+    const provider = endpoint("openrouter", { model: "openai/gpt-4.1-mini", baseURL: "https://openrouter.ai/api/v1" });
     stubFetch(async () =>
       textResponse(await fixtureText("../fixtures/openrouter/reasoning.sse"), "text/event-stream"));
 
@@ -273,7 +274,7 @@ describe("openAICompatible provider", () => {
       return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
     });
 
-    const provider = vllm("qwen-test", { apiKey: "x", baseURL: "https://example.com/v1" });
+    const provider = endpoint("vllm", { model: "qwen-test", baseURL: "https://example.com/v1" });
     const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
     await provider.complete({
       messages: [],
