@@ -6,6 +6,7 @@ import type {
   ToolCallBlock,
   Usage,
 } from "./types.js";
+import { ProviderError } from "./shared/errors.js";
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./shared/messages.js";
 
 export const completeFromStream = async (
@@ -27,10 +28,20 @@ export const completeFromStream = async (
         if (event.block.type === "tool_call") toolCalls.push(event.block);
         appendAssistantContentBlock(content, event.block);
         break;
-      case "issue":
-        if (event.issue.kind === "provider_error") throw new Error(event.issue.message);
-        if (event.issue.kind === "timeout" && event.issue.scope !== "tool") throw new Error(event.issue.message);
+      case "issue": {
+        const { issue } = event;
+        // A caller abort surfaces from the stream as a failed request; keep the caller's reason.
+        if (issue.kind === "timeout" && issue.scope !== "tool") {
+          request.signal?.throwIfAborted();
+          throw new ProviderError(issue.message, { kind: "timeout", retryable: issue.retryable, scope: issue.scope });
+        }
+        if (issue.kind === "provider_error") {
+          request.signal?.throwIfAborted();
+          const { kind, message, ...details } = issue;
+          throw new ProviderError(message, { kind, ...details });
+        }
         break;
+      }
       case "usage":
         usage = event.usage;
         finishReason = event.finishReason ?? finishReason;
@@ -38,6 +49,7 @@ export const completeFromStream = async (
     }
   }
 
+  request.signal?.throwIfAborted();
   finishReason ??= toolCalls.length > 0 ? "tool_use" : "stop";
   return {
     message: buildAssistantMessageFromContent(provider.model, content, usage, finishReason, provider.name),
