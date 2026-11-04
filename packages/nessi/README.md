@@ -440,6 +440,9 @@ Mistral's typed `thinking` chunks, `details` for OpenRouter's
 `reasoning_details`) and records the producing provider's `name` in
 `message.provider`; it sends reasoning back only to the provider with that
 name, as typed chunks when `compat.thinkingFormat` is `"content_chunks"`.
+With `compat.toolCallSignatures: "google"`, a Gemini tool call keeps its
+thought signature as `signature` and goes back with it; a call from another
+provider gets Gemini's placeholder that skips the check.
 Store assistant messages as they are, including these fields, and keep history
 append-only.
 
