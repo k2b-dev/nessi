@@ -70,9 +70,13 @@ export type ToolResultMessage = {
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
 export type Usage = {
+  /** Every prompt token, including the ones read from or written to a provider cache. */
   input: number;
   output: number;
+  /** Part of `input` the provider read from its prompt cache. */
   cacheRead?: number;
+  /** Part of `input` the provider wrote to its prompt cache. */
+  cacheWrite?: number;
   total: number;
   creditsUsed?: number;
 };

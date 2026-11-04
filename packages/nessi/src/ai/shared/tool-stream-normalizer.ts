@@ -323,7 +323,8 @@ export async function* normalizeProviderStream(
           if (event.finishReason && pending.size > 0) {
             yield* cancelPending("stream_ended_before_tool_call");
           }
-          yield* closeOpenBlock();
+          // Interim usage (no finish reason) arrives mid-answer; it must not split the open block.
+          if (event.finishReason) yield* closeOpenBlock();
           yield {
             ...event,
             finishReason: event.finishReason === "tool_use" && emittedToolCallCount === 0 && issueCount > 0

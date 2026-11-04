@@ -79,7 +79,9 @@ type SSEChunk = {
     finish_reason: string | null;
   }>;
   usage?: {
+    /** Includes `prompt_tokens_details.cached_tokens`. */
     prompt_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
     completion_tokens?: number;
     total_tokens?: number;
   };
@@ -205,8 +207,11 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
 
 const usageFromChunk = (chunk: SSEChunk, config: OpenAICompatibleConfig): Usage | undefined => {
   if (!chunk.usage) return undefined;
+  const usage = makeUsage(chunk.usage.prompt_tokens ?? 0, chunk.usage.completion_tokens ?? 0);
+  const cacheRead = chunk.usage.prompt_tokens_details?.cached_tokens;
+  if (typeof cacheRead === "number") usage.cacheRead = cacheRead;
   return applyCredits(
-    makeUsage(chunk.usage.prompt_tokens ?? 0, chunk.usage.completion_tokens ?? 0),
+    usage,
     config.creditsPerInputToken,
     config.creditsPerOutputToken,
   );
