@@ -315,6 +315,25 @@ could not build and never sent), `retryable`, and, when known, `status`,
 `scope`. Streaming `provider_error` issues carry the same `status`, `code`, and
 `retryAfterMs`. Nessi never retries; a caller abort throws the signal's reason.
 
+### Transport report
+
+Pass `onTransport` on a request to observe the transport without patching
+`fetch`. It is called once when a request nessi sent settles (answered,
+rejected, failed, timed out, or aborted) and before `complete()` throws:
+
+```ts
+await complete(provider, {
+  messages,
+  onTransport: ({ startedAt, headersAt, firstByteAt, status, retryAfterMs, connectionCode }) => {
+    metrics.record({ headersMs: headersAt && headersAt - startedAt, firstByteMs: firstByteAt && firstByteAt - startedAt, status });
+  },
+});
+```
+
+`headersAt` is missing when no response came; `connectionCode` names a
+connection that failed before one (`ECONNREFUSED`). An error thrown in the
+hook does not change the request.
+
 ## Reasoning effort
 
 Set `reasoningEffort` to control how much a reasoning model thinks. Set it on

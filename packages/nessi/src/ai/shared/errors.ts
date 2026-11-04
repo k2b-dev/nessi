@@ -71,6 +71,10 @@ export type ErrorBodyLimits = {
   idleMs?: number;
   /** Gives up at this time (`Date.now()` milliseconds), however the body flows. */
   deadlineAt?: number;
+  /** Gives up when aborted, also when the response body ignores the request's signal. */
+  signal?: AbortSignal;
+  /** Called with the first non-empty chunk. */
+  onFirstByte?: () => void;
 };
 
 /**
@@ -92,13 +96,18 @@ export const readErrorBody = async (response: Response, limits: ErrorBodyLimits 
       const waits = [idleMs, limits.deadlineAt === undefined ? undefined : limits.deadlineAt - Date.now()]
         .filter((ms): ms is number => ms !== undefined && Number.isFinite(ms));
       const waitMs = waits.length > 0 ? Math.min(...waits) : undefined;
-      if (waitMs !== undefined && waitMs <= 0) break;
+      if ((waitMs !== undefined && waitMs <= 0) || limits.signal?.aborted) break;
+      let stop: (() => void) | undefined;
       const stalled = new Promise<"stalled">((resolve) => {
-        if (waitMs !== undefined) timeout = setTimeout(() => resolve("stalled"), waitMs);
+        stop = () => resolve("stalled");
+        if (waitMs !== undefined) timeout = setTimeout(stop, waitMs);
+        limits.signal?.addEventListener("abort", stop, { once: true });
       });
       const result = await Promise.race([reader.read(), stalled]);
       clearTimeout(timeout);
+      if (stop) limits.signal?.removeEventListener("abort", stop);
       if (result === "stalled" || result.done) break;
+      if (result.value.byteLength > 0) limits.onFirstByte?.();
       const chunk = result.value.subarray(0, ERROR_BODY_LIMIT_BYTES - bytes);
       bytes += chunk.byteLength;
       text += decoder.decode(chunk, { stream: true });

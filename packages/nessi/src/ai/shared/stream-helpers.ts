@@ -1,8 +1,8 @@
-import { errorEnvelope, normalizeConnectionError, normalizeHttpError, readErrorBody, serializeRequest } from "./errors.js";
+import { errorEnvelope, normalizeConnectionError, normalizeHttpError, parseRetryAfterMs, readErrorBody, runtimeErrorCode, serializeRequest } from "./errors.js";
 import { parseJsonRecord } from "./json.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
-import type { ProviderTimeouts, RawStreamEvent } from "../types.js";
+import type { ProviderTimeouts, RawStreamEvent, TransportReport } from "../types.js";
 
 type SSEStreamResult =
   | { ok: true; events: AsyncGenerator<SSEEvent> }
@@ -33,10 +33,22 @@ export const openSSEStream = async (
   signal?: AbortSignal,
   contextWindow?: number,
   timeouts?: ProviderTimeouts,
+  onTransport?: (report: TransportReport) => void,
 ): Promise<SSEStreamResult> => {
   // An already aborted caller sends nothing; the stream reports the abort with the caller's reason.
   signal?.throwIfAborted();
   const serializedBody = serializeRequest(label, body);
+  const startedAt = Date.now();
+  let reported = false;
+  const report = (fields: Omit<TransportReport, "startedAt">) => {
+    if (reported || !onTransport) return;
+    reported = true;
+    try {
+      onTransport({ startedAt, ...fields });
+    } catch {
+      // Observation only: a failing hook must not change the request's outcome.
+    }
+  };
   let response: Response;
   const controller = new AbortController();
   const abortExternal = () => controller.abort(signal?.reason);
@@ -78,6 +90,8 @@ export const openSSEStream = async (
     ]);
   } catch (error) {
     cleanupExternalAbort();
+    const connectionCode = error instanceof SSETimeoutError || controller.signal.aborted ? undefined : runtimeErrorCode(error);
+    report(connectionCode !== undefined ? { connectionCode } : {});
     if (error instanceof SSETimeoutError) {
       return {
         ok: false,
@@ -117,17 +131,33 @@ export const openSSEStream = async (
     if (firstByteTimeout) clearTimeout(firstByteTimeout);
   }
 
+  const headersAt = Date.now();
+  const retryAfterMs = parseRetryAfterMs(response.headers);
+  let firstByteAt: number | undefined;
+  const noteFirstByte = () => { firstByteAt ??= Date.now(); };
+  const answered = () => ({
+    headersAt,
+    status: response.status,
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    ...(firstByteAt !== undefined ? { firstByteAt } : {}),
+  });
+  // An abort settles the request now, not when the consumer next reads the stream.
+  controller.signal.addEventListener("abort", () => report(answered()), { once: true });
+  const bodyLimits = { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline, signal: controller.signal, onFirstByte: noteFirstByte };
+
   if (!response.ok) {
     // Startup timers are cleared by now; a stalled error body must not hang the request.
-    const normalized = await normalizeHttpError(label, response, undefined, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
+    const normalized = await normalizeHttpError(label, response, undefined, bodyLimits);
     cleanupExternalAbort();
+    report(answered());
     return { ok: false, error: { type: "error", ...normalized } };
   }
 
   // Some gateways answer a stream request with a plain JSON body, usually an error envelope.
   if (response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
-    const text = await readErrorBody(response, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
+    const text = await readErrorBody(response, bodyLimits);
     cleanupExternalAbort();
+    report(answered());
     const record = parseJsonRecord<Record<string, unknown>>(text);
     const envelope = record ? errorEnvelope(label, record) : undefined;
     return {
@@ -138,9 +168,10 @@ export const openSSEStream = async (
     };
   }
 
-  const reader = response.body?.getReader();
-  if (!reader) {
+  const bodyReader = response.body?.getReader();
+  if (!bodyReader) {
     cleanupExternalAbort();
+    report(answered());
     return {
       ok: false,
       error: { type: "error", error: `${label} response body missing`, retryable: false },
@@ -152,6 +183,18 @@ export const openSSEStream = async (
     streamTimeouts.firstByteMs = Math.max(1, firstByteDeadline - Date.now());
   }
 
+  // An abort also ends the body read, even when a wrapped fetch does not tie the body to the signal.
+  controller.signal.addEventListener("abort", () => void bodyReader.cancel(controller.signal.reason).catch(() => {}), { once: true });
+
+  const reader = {
+    async read() {
+      const result = await bodyReader.read();
+      if (!result.done && result.value?.byteLength) noteFirstByte();
+      return result;
+    },
+    cancel: (reason?: unknown) => bodyReader.cancel(reason),
+  };
+
   const events = async function* (): AsyncGenerator<SSEEvent> {
     try {
       yield* parseSSE(reader, streamTimeouts);
@@ -159,6 +202,7 @@ export const openSSEStream = async (
       cleanupExternalAbort();
       controller.abort();
       await reader.cancel().catch(() => {});
+      report(answered());
     }
   };
 

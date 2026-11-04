@@ -303,6 +303,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         request.signal,
         contextWindow,
         config.timeouts,
+        request.onTransport,
       );
 
       if (!result.ok) {
