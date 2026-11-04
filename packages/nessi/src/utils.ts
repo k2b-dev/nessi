@@ -12,9 +12,30 @@ export const toErrorMessage = (err: unknown) =>
 export const createLoopId = () =>
   globalThis.crypto?.randomUUID?.() ?? `loop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-/** Rough token estimate: ~4 chars per token. Slightly overestimates due to JSON syntax — that's safer. */
-export const estimateTokens = (messages: Message[]): number =>
-  Math.ceil(JSON.stringify(messages).length / 4)
+/**
+ * Tokens one file part (an image) is assumed to cost. Providers price images by pixels, not by
+ * their base64 size; about 1,600 tokens is Anthropic's documented upper range for one image.
+ */
+export const FILE_PART_TOKEN_ESTIMATE = 1_600;
+
+/**
+ * Rough token estimate: ~4 characters per token for text and JSON, a fixed allowance per file
+ * part. Base64 file bodies are not counted as text. Slightly overestimates text due to JSON syntax.
+ */
+export const estimateContextTokens = (value: unknown): number => {
+  let files = 0;
+  const text = JSON.stringify(value, (_key, child: unknown) => {
+    if (child && typeof child === "object" && "type" in child && child.type === "file" && "data" in child) {
+      files++;
+      return { ...child, data: "" };
+    }
+    return child;
+  });
+  return Math.ceil((text?.length ?? 0) / 4) + files * FILE_PART_TOKEN_ESTIMATE;
+};
+
+/** Rough token estimate of messages; see `estimateContextTokens()`. */
+export const estimateTokens = (messages: Message[]): number => estimateContextTokens(messages);
 
 /** Truncate text keeping first half and last half with omission notice. */
 export const truncateMiddle = (text: string, maxChars: number): string => {
