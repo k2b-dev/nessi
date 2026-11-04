@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
@@ -161,7 +161,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt),
+        messages: buildRequest("ollama", () => convertMessages(request.messages, request.systemPrompt)),
         stream: false,
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
@@ -173,17 +173,17 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const response = await fetchCompleteResponse(`${baseURL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("ollama", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "ollama", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("ollama", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<OllamaResponse>(await response.text());
-      if (!payload) throw new Error("ollama returned invalid JSON.");
+      if (!payload) throw invalidResponseError("ollama");
       const usage = usageFromResponse(payload, options);
       const toolCalls = toolCallsFromResponse(payload);
       const finishReason = finishReasonFrom(payload, toolCalls.length > 0);
@@ -208,7 +208,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt),
+        messages: buildRequest("ollama", () => convertMessages(request.messages, request.systemPrompt)),
         stream: true,
       };
       if (request.tools?.length) body.tools = toOllamaTools(request.tools);
@@ -218,6 +218,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       applyThink(body, request, options);
 
       let response: Response;
+      const serializedBody = serializeRequest("ollama", withExtraBody(body, request, options));
       const controller = new AbortController();
       const abortExternal = () => controller.abort(request.signal?.reason);
       const cleanupExternalAbort = () => {
@@ -236,18 +237,20 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           fetch(`${baseURL}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(withExtraBody(body, request, options)),
+            body: serializedBody,
             redirect: "error",
             signal: controller.signal,
           }),
           new Promise<never>((_, reject) => {
             if (!options?.timeouts?.firstByteMs || options.timeouts.firstByteMs <= 0) return;
             firstByteTimeout = setTimeout(() => {
-              controller.abort();
-              reject({
+              // Reject first: the aborted fetch would otherwise win the race as a connection error.
+              const timeout = {
                 scope: "provider_first_byte",
                 message: `ollama first byte timeout after ${options.timeouts!.firstByteMs}ms.`,
-              });
+              };
+              reject(timeout);
+              controller.abort(timeout);
             }, options.timeouts.firstByteMs);
           }),
         ]);
@@ -262,11 +265,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           };
           return;
         }
-        yield {
-          type: "error",
-          error: formatConnectionError("ollama", error),
-          retryable: true,
-        };
+        yield { type: "error", ...normalizeConnectionError("ollama", error) };
         return;
       } finally {
         if (firstByteTimeout) clearTimeout(firstByteTimeout);

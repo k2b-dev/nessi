@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -251,7 +251,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
       };
       if (request.tools?.length) body.tools = toAnthropicTools(request.tools);
@@ -267,17 +267,17 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           "x-api-key": options?.apiKey ?? globalThis.process?.env?.ANTHROPIC_API_KEY ?? "",
           "anthropic-version": apiVersion,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("anthropic", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "anthropic", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("anthropic", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<AnthropicResponse>(await response.text());
-      if (!payload) throw new Error("anthropic returned invalid JSON.");
+      if (!payload) throw invalidResponseError("anthropic");
       const content: AssistantContentBlock[] = [];
       const idPrefix = fallbackToolCallPrefix("anthropic");
       let toolIndex = 0;
@@ -315,7 +315,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
         stream: true,
       };

@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "./errors.js";
+import { normalizeConnectionError, normalizeHttpError, serializeRequest } from "./errors.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
 import type { ProviderTimeouts, RawStreamEvent } from "../types.js";
@@ -33,7 +33,7 @@ export const openSSEStream = async (
   contextWindow?: number,
   timeouts?: ProviderTimeouts,
 ): Promise<SSEStreamResult> => {
-  const serializedBody = JSON.stringify(body);
+  const serializedBody = serializeRequest(label, body);
   let response: Response;
   const controller = new AbortController();
   const abortExternal = () => controller.abort(signal?.reason);
@@ -61,8 +61,10 @@ export const openSSEStream = async (
       new Promise<never>((_, reject) => {
         if (!timeouts?.firstByteMs || timeouts.firstByteMs <= 0) return;
         firstByteTimeout = setTimeout(() => {
-          controller.abort();
-          reject(new SSETimeoutError("provider_first_byte", timeouts.firstByteMs!));
+          // Reject first: the aborted fetch would otherwise win the race as a connection error.
+          const timeout = new SSETimeoutError("provider_first_byte", timeouts.firstByteMs!);
+          reject(timeout);
+          controller.abort(timeout);
         }, timeouts.firstByteMs);
       }),
     ]);
@@ -101,7 +103,7 @@ export const openSSEStream = async (
     }
     return {
       ok: false,
-      error: { type: "error", error: formatConnectionError(label, error), retryable: true },
+      error: { type: "error", ...normalizeConnectionError(label, error) },
     };
   } finally {
     if (firstByteTimeout) clearTimeout(firstByteTimeout);

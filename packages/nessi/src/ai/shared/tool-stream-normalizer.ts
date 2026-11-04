@@ -1,3 +1,4 @@
+import { ProviderError } from "./errors.js";
 import { safeJsonParse, stringifyJson } from "./json.js";
 import type {
   AssistantBlockKind,
@@ -339,6 +340,9 @@ export async function* normalizeProviderStream(
             kind: "provider_error",
             message: event.error,
             retryable: event.retryable,
+            ...(event.status !== undefined ? { status: event.status } : {}),
+            ...(event.code !== undefined ? { code: event.code } : {}),
+            ...(event.retryAfterMs !== undefined ? { retryAfterMs: event.retryAfterMs } : {}),
             contextOverflow: event.contextOverflow,
             overflowRatio: event.overflowRatio,
           });
@@ -372,7 +376,8 @@ export async function* normalizeProviderStream(
     yield* emitIssue({
       kind: "provider_error",
       message: error instanceof Error ? error.message : String(error),
-      retryable: true,
+      // A request nessi could not build fails the same way on every attempt.
+      retryable: error instanceof ProviderError ? error.retryable : true,
     });
     return;
   }

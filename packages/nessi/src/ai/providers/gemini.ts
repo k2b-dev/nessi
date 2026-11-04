@@ -1,4 +1,4 @@
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -178,7 +178,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
 
   const buildBody = (request: GenerateRequest) => {
     const body: Record<string, unknown> = {
-      contents: convertMessages(request.messages),
+      contents: buildRequest("gemini", () => convertMessages(request.messages)),
     };
     if (request.systemPrompt) {
       body.systemInstruction = { parts: [{ text: request.systemPrompt }] };
@@ -217,17 +217,17 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const response = await fetchCompleteResponse(urlFor("generateContent"), {
         method: "POST",
         headers,
-        body: JSON.stringify(buildBody(request)),
+        body: serializeRequest("gemini", buildBody(request)),
         signal: request.signal,
       }, "gemini", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("gemini", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<GeminiResponse>(await response.text());
-      if (!payload) throw new Error("gemini returned invalid JSON.");
+      if (!payload) throw invalidResponseError("gemini");
       const candidate = payload.candidates?.[0];
       const content: AssistantContentBlock[] = [];
       let toolCount = 0;

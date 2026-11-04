@@ -1,4 +1,4 @@
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -249,7 +249,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt, options),
+        messages: buildRequest("mistral", () => convertMessages(request.messages, request.systemPrompt, options)),
         stream: false,
       };
       if (request.tools?.length) {
@@ -268,17 +268,17 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${options?.apiKey ?? globalThis.process?.env?.MISTRAL_API_KEY ?? ""}`,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("mistral", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "mistral", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("mistral", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<MistralChunk>(await response.text());
-      if (!payload) throw new Error("mistral returned invalid JSON.");
+      if (!payload) throw invalidResponseError("mistral");
       const choice = payload.choices?.[0];
       const idPrefix = fallbackToolCallPrefix("mistral");
       const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => {
@@ -303,7 +303,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt, options),
+        messages: buildRequest("mistral", () => convertMessages(request.messages, request.systemPrompt, options)),
         stream: true,
       };
       if (request.tools?.length) {
