@@ -426,6 +426,18 @@ describe("Gemini thought signatures on tool calls", () => {
     ]);
   });
 
+  it("keeps a signature that arrives on a later delta, for each of several calls", async () => {
+    stubFetch(async () => textResponse(sse([
+      { choices: [{ index: 0, delta: { tool_calls: [
+        { index: 0, id: "a", type: "function", function: { name: "lookup", arguments: "{}" } },
+        { index: 1, id: "b", type: "function", function: { name: "lookup", arguments: "{}" }, extra_content: { google: { thought_signature: "sig-B" } } },
+      ] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, extra_content: { google: { thought_signature: "sig-A" } } }] }, finish_reason: "tool_calls" }] },
+    ]), "text/event-stream"));
+    const result = await complete(gemini({ toolCallSignatures: "google" }), { messages: [] });
+    expect(result.message.content.map((block) => (block.type === "tool_call" ? [block.id, block.signature] : []))).toEqual([["a", "sig-A"], ["b", "sig-B"]]);
+  });
+
   it("neither reads nor sends signatures without the setting", async () => {
     const bodies: any[] = [];
     stubFetch(async (_input, init) => {
