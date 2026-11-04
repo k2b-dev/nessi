@@ -185,6 +185,11 @@ export type ProviderCapabilities = {
   thinking: boolean;
   usage: boolean;
   structuredOutput?: boolean;
+  /**
+   * Native structured output follows strict JSON Schema rules: every object property is required.
+   * Defaults to `true`; guided decoding such as vLLM's `structured_outputs` sets `false`.
+   */
+  strictStructuredOutput?: boolean;
 };
 
 /**

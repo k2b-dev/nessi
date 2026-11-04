@@ -1,7 +1,7 @@
 import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
-import { ensureRecord, isRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -243,12 +243,12 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
     }
   }
   const idPrefix = fallbackToolCallPrefix(config.name);
-  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => ({
-    type: "tool_call",
-    id: call.id ?? `${idPrefix}-${index}`,
-    name: call.function?.name ?? "",
-    args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
-  }));
+  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => {
+    const name = call.function?.name ?? "";
+    const args = parseToolArguments(call.function?.arguments);
+    if (!args) throw malformedToolArgumentsError(config.name, name);
+    return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
+  });
 
   const usage = usageFromChunk(payload, config);
   // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
@@ -305,6 +305,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       thinking: config.compat?.thinkingFormat !== "none",
       usage: true,
       structuredOutput: config.compat?.structuredOutput !== undefined && config.compat.structuredOutput !== false,
+      ...(config.compat?.structuredOutput === "vllm_structured_outputs" ? { strictStructuredOutput: false } : {}),
     },
 
     async complete(request: GenerateRequest): Promise<GenerateResult> {
@@ -497,7 +498,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
             if (!existing) {
               const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               const buffer = {
                 callId,
                 name,
@@ -509,7 +510,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               if (argsDelta) existing.argsBuffer += argsDelta;
               const wasStarted = existing.started;
               yield* startToolCall(existing);

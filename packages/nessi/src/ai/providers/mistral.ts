@@ -5,7 +5,7 @@ import {
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, isRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -287,12 +287,12 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
         throw new ProviderError("mistral returned no choices.", { kind: "provider_error", retryable: true });
       }
       const idPrefix = fallbackToolCallPrefix("mistral");
-      const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => ({
-        type: "tool_call",
-        id: call.id ?? `${idPrefix}-${index}`,
-        name: call.function?.name ?? "",
-        args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
-      }));
+      const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => {
+        const name = call.function?.name ?? "";
+        const args = parseToolArguments(call.function?.arguments);
+        if (!args) throw malformedToolArgumentsError("mistral", name);
+        return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
+      });
       const usage = usageFromChunk(payload, options);
       const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
       const content = [...contentBlocks(choice?.message?.content), ...toolCalls];
@@ -413,7 +413,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
             if (!existing) {
               const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               const buffer = {
                 callId,
                 name,
@@ -425,7 +425,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               if (argsDelta) existing.argsBuffer += argsDelta;
               const wasStarted = existing.started;
               yield* startToolCall(existing);

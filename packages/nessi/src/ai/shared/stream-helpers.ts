@@ -54,6 +54,8 @@ export const openSSEStream = async (
         method: "POST",
         headers,
         body: serializedBody,
+        // Credential headers such as x-api-key would follow a redirect to another origin.
+        redirect: "error",
         signal: controller.signal,
       }),
       new Promise<never>((_, reject) => {
@@ -108,7 +110,8 @@ export const openSSEStream = async (
   }
 
   if (!response.ok) {
-    const normalized = await normalizeHttpError(label, response);
+    // Startup timers are cleared by now; a stalled error body must not hang the request.
+    const normalized = await normalizeHttpError(label, response, undefined, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
     cleanupExternalAbort();
     return { ok: false, error: { type: "error", ...normalized } };
   }
