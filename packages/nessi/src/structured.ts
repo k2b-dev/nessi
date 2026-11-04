@@ -91,8 +91,8 @@ const hasUnsupportedComposition = (schema: Record<string, unknown>) =>
   "oneOf" in schema || "allOf" in schema || "not" in schema;
 
 /**
- * Whether native structured output can enforce the schema. `strict` providers also need every
- * object property required. `anyOf` (such as Zod's `.nullable()`) works below the root object.
+ * Whether native structured output can enforce the schema. `strict` providers also need closed
+ * objects with every property required. `anyOf` (such as Zod's `.nullable()`) works below the root.
  */
 const isNativeSchemaCompatible = (schema: unknown, strict: boolean, root = true): boolean => {
   if (!isRecord(schema)) return false;
@@ -111,6 +111,8 @@ const isNativeSchemaCompatible = (schema: unknown, strict: boolean, root = true)
   if (type === "object") {
     const properties = schema.properties;
     const required = schema.required;
+    // Open objects and records (`additionalProperties` other than false) are not strict.
+    if (strict && schema.additionalProperties !== false) return false;
     if (!isRecord(properties)) return true;
     const requiredKeys: unknown[] = Array.isArray(required) ? required : [];
     for (const key of Object.keys(properties)) {

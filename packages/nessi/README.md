@@ -236,8 +236,8 @@ console.log(result.aggregate.usage);
 For providers and schemas that are safe for native structured output, Nessi
 passes a provider-specific `responseFormat`. Otherwise it falls back to schema
 instructions and one repair attempt. Nullable fields and unions below the root
-object stay native; strict providers fall back for `.optional()` properties,
-while vLLM guided decoding (`capabilities.strictStructuredOutput: false`)
+stay native. Strict providers fall back for `.optional()` properties and open
+objects; vLLM guided decoding (`capabilities.strictStructuredOutput: false`)
 accepts them. `input` can be a string, content parts, or
 a full user message, including image file parts when the provider supports
 images.

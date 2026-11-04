@@ -46,11 +46,17 @@ const completeProvider = (responses: string[], structuredOutput: boolean) => {
 
 describe("nessi.structured", () => {
   describe("native schema support", () => {
-    const usesNative = async (output: z.ZodType, capabilities: Partial<Provider["capabilities"]> = {}) => {
-      const { provider, requests } = completeProvider(["{}"], true);
+    const usesNative = async (
+      output: z.ZodType,
+      capabilities: Partial<Provider["capabilities"]> = {},
+      answer = "{}",
+    ) => {
+      const { provider, requests } = completeProvider([answer], true);
       provider.capabilities = { ...provider.capabilities, ...capabilities };
-      await nessi.structured({ provider, input: "Extract.", output }).catch(() => undefined);
-      return requests[0]?.responseFormat !== undefined;
+      const result = await nessi.structured({ provider, input: "Extract.", output }).catch(() => undefined);
+      const native = requests[0]?.responseFormat !== undefined;
+      if (native && answer !== "{}") expect(result?.structuredMeta.mode).toBe("native");
+      return native;
     };
 
     it("sends nullable fields and unions natively", async () => {
@@ -59,18 +65,21 @@ describe("nessi.structured", () => {
         status: z.enum(["open", "closed"]).nullable(),
         amount: z.union([z.string(), z.number()]),
         lines: z.array(z.object({ total: z.number().nullable() })),
-      }))).toBe(true);
+      }), {}, '{"title":null,"status":"open","amount":3,"lines":[{"total":null}]}')).toBe(true);
     });
 
     it("falls back for a union at the root and for unsupported branches", async () => {
       expect(await usesNative(z.union([z.object({ a: z.string() }), z.object({ b: z.string() })]))).toBe(false);
       expect(await usesNative(z.object({ value: z.union([z.object({ a: z.string().optional() }), z.null()]) }))).toBe(false);
+      expect(await usesNative(z.object({ value: z.looseObject({ name: z.string() }).nullable() }))).toBe(false);
+      expect(await usesNative(z.object({ tags: z.record(z.string(), z.string()).nullable() }))).toBe(false);
+      expect(await usesNative(z.object({ tags: z.record(z.string(), z.string()) }))).toBe(false);
     });
 
     it("needs every property required only for strict providers", async () => {
       const optional = z.object({ title: z.string(), note: z.string().optional() });
       expect(await usesNative(optional)).toBe(false);
-      expect(await usesNative(optional, { strictStructuredOutput: false })).toBe(true);
+      expect(await usesNative(optional, { strictStructuredOutput: false }, '{"title":"x"}')).toBe(true);
     });
 
     it("marks vLLM guided decoding as not strict", () => {

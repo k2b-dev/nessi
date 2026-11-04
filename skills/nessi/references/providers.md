@@ -118,12 +118,13 @@ results. It validates the result with Zod, uses native provider structured
 output where available, and falls back to schema instructions plus one repair
 attempt.
 
-Native mode needs a root object. Nullable fields and unions (`anyOf`) below the
-root work natively; `oneOf`, `allOf`, and `not` fall back. Strict providers
-(OpenAI, OpenRouter, Mistral, Anthropic, Gemini, Ollama) also need every object
-property required, so `.optional()` falls back; use `.nullable()` instead.
-vLLM guided decoding sets `capabilities.strictStructuredOutput: false` and
-accepts optional properties natively.
+Nullable fields and unions (`anyOf`) below the root work natively; a union at
+the root, `oneOf`, `allOf`, and `not` fall back. Nessi treats every adapter
+except vLLM as strict: objects must be closed and every property required, so
+`.optional()`, `z.looseObject()`, and `z.record()` fall back. Use `.nullable()`
+for fields that may be missing. vLLM guided decoding sets
+`capabilities.strictStructuredOutput: false` and accepts optional properties and
+open objects natively.
 
 The provider layer also exposes a low-level `responseFormat` request option for
 apps that intentionally want a single provider call:
