@@ -5,7 +5,7 @@ import {
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { safeJsonParse } from "../shared/json.js";
+import { malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -30,7 +30,7 @@ type GeminiPart = {
   /** Opaque signature that must be returned in the same part (required for Gemini 3 function calls). */
   thoughtSignature?: string;
   inlineData?: { mimeType: string; data: string };
-  functionCall?: { name: string; args?: Record<string, unknown> };
+  functionCall?: { name: string; args?: unknown };
   functionResponse?: { name: string; response: Record<string, unknown> };
 };
 
@@ -233,11 +233,13 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       let toolCount = 0;
       for (const part of candidate?.content?.parts ?? []) {
         if (part.functionCall) {
+          const args = parseToolArguments(part.functionCall.args);
+          if (!args) throw malformedToolArgumentsError("gemini", part.functionCall.name);
           content.push({
             type: "tool_call",
             id: `${requestId}-${toolCount++}`,
             name: part.functionCall.name,
-            args: part.functionCall.args ?? {},
+            args,
             ...signatureOf(part),
           });
         } else if (part.thought) {
@@ -296,14 +298,21 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
         for (const part of parts) {
           if (part.functionCall) {
             const callId = `${requestId}-${toolCounter++}`;
-            yield { type: "tool_start", callId, name: part.functionCall.name };
-            yield {
-              type: "tool_call",
-              callId,
-              name: part.functionCall.name,
-              args: part.functionCall.args ?? {},
-              ...signatureOf(part),
-            };
+            const { name } = part.functionCall;
+            yield { type: "tool_start", callId, name };
+            const args = parseToolArguments(part.functionCall.args);
+            if (!args) {
+              yield {
+                type: "tool_error",
+                callId,
+                name,
+                reason: "invalid_tool_arguments",
+                message: `Received malformed JSON arguments for "${name}".`,
+                argsText: stringifyJson(part.functionCall.args),
+              };
+              continue;
+            }
+            yield { type: "tool_call", callId, name, args, ...signatureOf(part) };
           } else if (part.thought) {
             yield { type: "thinking", delta: part.text ?? "", ...signatureOf(part) };
           } else if (part.text || part.thoughtSignature !== undefined) {
