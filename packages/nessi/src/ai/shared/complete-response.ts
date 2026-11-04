@@ -2,7 +2,10 @@ import type { ProviderTimeouts } from "../types.js";
 import { formatConnectionError } from "./errors.js";
 import type { ByteStreamReader } from "./sse.js";
 
-/** Buffer a native response with a total deadline and idle limits after headers. */
+/**
+ * Buffer a native response with a total deadline and idle limits after headers.
+ * Redirects fail: credential headers such as x-api-key would follow them to another origin.
+ */
 export const fetchCompleteResponse = async (
   url: string,
   init: RequestInit,
@@ -34,7 +37,7 @@ export const fetchCompleteResponse = async (
   try {
     totalTimeout = scheduleTimeout("provider_total", timeouts?.totalMs);
     const response = await Promise.race([
-      fetch(url, { ...init, signal: controller.signal }).then((response) => {
+      fetch(url, { ...init, redirect: "error", signal: controller.signal }).then((response) => {
         // A response can arrive just after an abort, including with custom fetch implementations.
         if (controller.signal.aborted) {
           void response.body?.cancel(controller.signal.reason).catch(() => {});
