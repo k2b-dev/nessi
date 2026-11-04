@@ -52,19 +52,29 @@ export const fetchCompleteResponse = async (
 
     const decoder = new TextDecoder();
     let text = "";
+    let errorBytes = 0;
+    let truncated = false;
     while (true) {
       clearTimeout(idleTimeout);
       idleTimeout = scheduleTimeout("provider_idle", timeouts?.idleMs);
       const { done, value } = await Promise.race([reader.read(), aborted]);
       if (done) break;
-      text += decoder.decode(value, { stream: true });
+      if (!value) continue;
+      if (response.ok) {
+        text += decoder.decode(value, { stream: true });
+        continue;
+      }
       // An error body only feeds the error message.
-      if (!response.ok && text.length >= ERROR_BODY_LIMIT_BYTES) {
+      const chunk = value.subarray(0, ERROR_BODY_LIMIT_BYTES - errorBytes);
+      errorBytes += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (errorBytes >= ERROR_BODY_LIMIT_BYTES) {
+        truncated = true;
         void reader.cancel?.().catch(() => {});
         break;
       }
     }
-    text += decoder.decode();
+    if (!truncated) text += decoder.decode();
     return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
   } catch (error) {
     controller.abort(error);

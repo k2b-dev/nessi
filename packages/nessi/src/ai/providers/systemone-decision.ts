@@ -10,7 +10,7 @@ import type {
   ScoreQuestion,
   SystemOneResponse,
 } from "../decision.js";
-import { formatConnectionError } from "../shared/errors.js";
+import { formatConnectionError, readErrorBody } from "../shared/errors.js";
 
 export type SystemOneDecisionOptions = {
   /** Base URL including `/v1`; `/systemone` is appended. */
@@ -111,7 +111,7 @@ export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProv
       throw new Error(formatConnectionError(name, error));
     });
 
-    const text = await response.text();
+    const text = response.ok ? await response.text() : await readErrorBody(response);
     let body: unknown;
     try {
       body = JSON.parse(text);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { anthropic, gemini, mistral, ollama, openAICompatible } from "../../../src/ai/index.js";
+import { anthropic, gemini, mistral, ollama, openAICompatible, openAICompatibleTranscription, systemOneDecision } from "../../../src/ai/index.js";
 import type { Provider, ProviderTimeouts, StreamEvent } from "../../../src/ai/types.js";
 import { ERROR_BODY_LIMIT_BYTES, readErrorBody } from "../../../src/ai/shared/errors.js";
 import { stubFetch } from "../helpers/fixtures.js";
@@ -38,7 +38,7 @@ const endlessErrorBody = () => {
   return { response, counter };
 };
 
-async function bounded<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
+async function bounded<T>(promise: Promise<T>, ms = 500): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -68,6 +68,14 @@ describe("streaming error bodies", () => {
       });
     }
 
+    it(`${name} keeps the first-byte deadline absolute when headers arrive late`, async () => {
+      stubFetch(() => new Promise<Response>((resolve) => setTimeout(() => resolve(stalledErrorBody()), 60)));
+      const startedAt = Date.now();
+      await bounded(streamIssues(create({ firstByteMs: 100 })));
+      // Headers at 60 ms leave 40 ms of the budget for the body; restarting it would end near 160 ms.
+      expect(Date.now() - startedAt).toBeLessThan(140);
+    });
+
     it(`${name} stream stops reading an endless error body`, async () => {
       const { response, counter } = endlessErrorBody();
       stubFetch(() => response);
@@ -85,12 +93,40 @@ describe("streaming error bodies", () => {
   }
 });
 
+const oneChunk = (bytes: Uint8Array, status = 500) => new Response(new ReadableStream<Uint8Array>({
+  start(controller) {
+    controller.enqueue(bytes);
+    controller.close();
+  },
+}), { status });
+
 describe("readErrorBody", () => {
-  it("keeps at most the byte budget and decodes split characters", async () => {
-    const text = "ü".repeat(ERROR_BODY_LIMIT_BYTES);
-    const body = await readErrorBody(new Response(text, { status: 500 }));
-    expect(encoder.encode(body).byteLength).toBeLessThanOrEqual(ERROR_BODY_LIMIT_BYTES);
-    expect(body.startsWith("üüü")).toBe(true);
+  it("keeps at most the byte budget and drops a character cut at the boundary", async () => {
+    const bytes = encoder.encode(`${"a".repeat(ERROR_BODY_LIMIT_BYTES - 1)}€${"b".repeat(1024)}`);
+    const body = await readErrorBody(oneChunk(bytes));
+    expect(body).toBe("a".repeat(ERROR_BODY_LIMIT_BYTES - 1));
+  });
+
+  it("caps native completion error bodies by bytes, also in one large chunk", async () => {
+    stubFetch(() => oneChunk(encoder.encode("€".repeat(ERROR_BODY_LIMIT_BYTES)), 500));
+    const error = await openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" })
+      .complete(request).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : "";
+    expect(encoder.encode(message).byteLength).toBeLessThanOrEqual(ERROR_BODY_LIMIT_BYTES + 100);
+    expect(message).not.toContain("\uFFFD");
+  });
+
+  it("bounds transcription and decision error bodies", async () => {
+    for (const run of [
+      (): Promise<unknown> => openAICompatibleTranscription("whisper", { baseURL: "https://example.test" }).transcribe({ file: new Blob(["a"], { type: "audio/wav" }) }),
+      () => systemOneDecision("clef", { baseURL: "https://example.test" }).decide({ state: "x", questions: { urgent: { type: "noul", instructions: "Urgent?" } } }),
+    ]) {
+      const { response, counter } = endlessErrorBody();
+      stubFetch(() => response);
+      await expect(bounded(run())).rejects.toThrow("429");
+      expect(counter.pulls * 16 * 1024).toBeLessThanOrEqual(ERROR_BODY_LIMIT_BYTES + 3 * 16 * 1024);
+    }
   });
 
   it("returns what arrived when the body fails", async () => {

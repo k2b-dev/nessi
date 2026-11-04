@@ -107,7 +107,7 @@ export const openSSEStream = async (
 
   if (!response.ok) {
     // Startup timers are cleared by now; a stalled error body must not hang the request.
-    const normalized = await normalizeHttpError(label, response, undefined, timeouts?.idleMs ?? timeouts?.firstByteMs);
+    const normalized = await normalizeHttpError(label, response, undefined, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
     cleanupExternalAbort();
     return { ok: false, error: { type: "error", ...normalized } };
   }

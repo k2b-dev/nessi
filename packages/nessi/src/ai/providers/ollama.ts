@@ -276,7 +276,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           "ollama",
           response,
           undefined,
-          options?.timeouts?.idleMs ?? options?.timeouts?.firstByteMs,
+          { idleMs: options?.timeouts?.idleMs, deadlineAt: firstByteDeadline },
         );
         cleanupExternalAbort();
         yield { type: "error", ...normalized };
