@@ -1,12 +1,12 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, providerError, ProviderError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -44,7 +44,7 @@ type AnthropicResponse = {
     | { type: "thinking"; thinking?: string; signature?: string }
     | { type: "redacted_thinking"; data?: string }
     | { type: "text"; text?: string }
-    | { type: "tool_use"; id?: string; name: string; input?: Record<string, unknown> }
+    | { type: "tool_use"; id?: string; name: string; input?: unknown }
   >;
   stop_reason?: string | null;
   usage?: AnthropicUsage;
@@ -59,6 +59,7 @@ type AnthropicUsage = {
 };
 
 type AnthropicStreamEvent = {
+  type?: string;
   message?: {
     id?: string;
     model?: string;
@@ -250,7 +251,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
       };
       if (request.tools?.length) body.tools = toAnthropicTools(request.tools);
@@ -266,17 +267,20 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
           "x-api-key": options?.apiKey ?? globalThis.process?.env?.ANTHROPIC_API_KEY ?? "",
           "anthropic-version": apiVersion,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("anthropic", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "anthropic", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("anthropic", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<AnthropicResponse>(await response.text());
-      if (!payload) throw new Error("anthropic returned invalid JSON.");
+      const payload = parseJsonRecord<AnthropicResponse>(await response.text());
+      if (!payload) throw invalidResponseError("anthropic");
+      const envelope = errorEnvelope("anthropic", payload, (type) => RETRYABLE_STREAM_ERRORS.has(type));
+      if (envelope) throw providerError(envelope);
+      if (!Array.isArray(payload.content)) throw new ProviderError("anthropic returned no content.", { kind: "provider_error", retryable: true });
       const content: AssistantContentBlock[] = [];
       const idPrefix = fallbackToolCallPrefix("anthropic");
       let toolIndex = 0;
@@ -292,7 +296,9 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         } else if (block.type === "text") {
           appendAssistantContentBlock(content, { type: "text", text: block.text ?? "" });
         } else if (block.type === "tool_use") {
-          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args: block.input ?? {} });
+          const args = parseToolArguments(block.input);
+          if (!args) throw malformedToolArgumentsError("anthropic", block.name);
+          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args });
           toolIndex++;
         }
       }
@@ -312,7 +318,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       const body: Record<string, unknown> = {
         model,
         system: request.systemPrompt,
-        messages: convertMessages(request.messages),
+        messages: buildRequest("anthropic", () => convertMessages(request.messages)),
         max_tokens: request.maxOutputTokens ?? maxOutputTokens,
         stream: true,
       };
@@ -352,10 +358,15 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
 
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
-        const payload = safeJsonParse<AnthropicStreamEvent>(event.data);
-        if (!payload) continue;
+        if (!event.data.trim()) continue;
+        const payload = parseJsonRecord<AnthropicStreamEvent>(event.data);
+        if (!payload) {
+          yield malformedRecordError("anthropic");
+          return;
+        }
 
-        if (event.event === "error") {
+        // Proxies may drop the SSE event name and keep only `{ type: "error" }`.
+        if (event.event === "error" || payload.type === "error") {
           const type = payload.error?.type ?? "unknown_error";
           yield {
             type: "error",
@@ -377,7 +388,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "content_block_start" && payload.content_block?.type === "tool_use") {
           const index = typeof payload.index === "number" ? payload.index : syntheticIndex++;
           const startInput = payload.content_block.input;
-          const argsBuffer = startInput && Object.keys(startInput).length > 0 ? JSON.stringify(startInput) : "";
+          const argsBuffer = toolArgumentsText(startInput);
           toolBuffers.set(index, {
             callId: payload.content_block.id ?? `${idPrefix}-${index}`,
             name: payload.content_block.name ?? "",
