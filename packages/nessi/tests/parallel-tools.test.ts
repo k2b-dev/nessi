@@ -3,7 +3,7 @@ import { z } from "zod";
 import { nessi } from "../src/nessi.js";
 import { memoryStore } from "../src/stores.js";
 import { defineTool } from "../src/tools.js";
-import type { OutboundEvent, SessionStore, Tool, ToolContext } from "../src/types.js";
+import type { OutboundEvent, SessionStore, Tool, ToolCallBlock, ToolContext } from "../src/types.js";
 import type { RawStreamEvent } from "../src/ai/types.js";
 import { mockProviderMultiTurn } from "./mock-provider.js";
 
@@ -78,6 +78,8 @@ describe("parallel tool calls", () => {
     }));
 
     expect(state.maxActive).toBe(3);
+    const stored = (await store.load()).find(({ message }) => message.role === "assistant")?.message;
+    expect(stored?.role === "assistant" ? stored.content.map((block) => block.type === "tool_call" && block.parallel) : []).toEqual([true, true, true]);
     // b finishes first, yet the history follows the call order.
     expect(state.log.indexOf("end b")).toBeLessThan(state.log.indexOf("end a"));
     expect((await storedResults(store)).map((result) => [result.callId, result.result])).toEqual([["a", "a"], ["b", "b"], ["c", "c"]]);
@@ -277,16 +279,90 @@ describe("parallel tool calls", () => {
     await store.append({
       role: "assistant",
       stopReason: "tool_use",
-      content: ["a", "b", "c"].map((id) => ({ type: "tool_call" as const, id, name: "read", args: { id } }))
-        .concat([{ type: "tool_call", id: "w", name: "write", args: { id: "w" } }]),
+      content: [
+        ...["a", "b", "c"].map((id): ToolCallBlock => ({ type: "tool_call", id, name: "read", args: { id }, parallel: true })),
+        { type: "tool_call", id: "w", name: "write", args: { id: "w" } },
+      ],
     });
     await store.append({ role: "tool_result", callId: "a", name: "read", result: "a" });
-    const tools: Tool[] = [read, write];
+    // The group comes from the stored marks, so it holds even after read became serial.
+    const tools: Tool[] = [{ ...read, def: { ...read.def, concurrency: "serial" } }, write];
     await collect(nessi({ provider: mockProviderMultiTurn(() => done), store, systemPrompt: "s", tools }));
     // b and c ran with a; w waited for the group and never started.
     expect(ran).toEqual(["w"]);
     expect((await storedResults(store)).map((result) => [result.callId, result.reason])).toEqual([
       ["a", undefined], ["b", "not_returned"], ["c", "not_returned"], ["w", undefined],
+    ]);
+  });
+
+  it("ends the group's other calls when storing a result fails, instead of waiting for them", async () => {
+    const base = memoryStore();
+    const store: SessionStore = {
+      load: () => base.load(),
+      append: async (message, opts) => {
+        if (message.role === "tool_result" && message.callId === "a") throw new Error("disk full");
+        await base.append(message, opts);
+      },
+    };
+    const quick = defineTool({ name: "quick", description: "Quick", inputSchema: z.object({}), concurrency: "parallel" }).server(async () => "ok");
+    // Waits for an answer that never comes and has no timeout.
+    const ask = defineTool({ name: "ask", description: "Ask", inputSchema: z.object({}), concurrency: "parallel", timeoutMs: false })
+      .server(async (_input, ctx) => ctx.requestApproval("ok?"));
+    const started = Date.now();
+    const events = await collect(nessi({
+      provider: callsThenDone([{ id: "a", name: "quick" }, { id: "b", name: "ask" }]),
+      store,
+      systemPrompt: "s",
+      input: "go",
+      tools: [quick, ask],
+    }));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("does not change the history after the consumer stops early", async () => {
+    const ask = defineTool({ name: "ask", description: "Ask", inputSchema: z.object({}), concurrency: "parallel" })
+      .server(async (_input, ctx) => ctx.requestApproval("ok?"));
+    const quick = defineTool({ name: "quick", description: "Quick", inputSchema: z.object({}), concurrency: "parallel" }).server(async () => "ok");
+    const store = memoryStore();
+    const loop = nessi({
+      provider: callsThenDone([{ id: "a", name: "ask" }, { id: "b", name: "quick" }]),
+      store,
+      systemPrompt: "s",
+      input: "go",
+      tools: [ask, quick],
+    });
+    for await (const event of loop) if (event.type === "tool_action_request") break;
+    await sleep(30);
+    // b finished but waited behind a; it stays without a result, which a resume answers as not_returned.
+    expect(await storedResults(store)).toEqual([]);
+  });
+
+  it("keeps call order when an earlier call fails before storing anything", async () => {
+    const store = memoryStore();
+    const read = defineTool({
+      name: "read",
+      description: "Read",
+      inputSchema: z.object({ ms: z.number() }),
+      concurrency: "parallel",
+      outputSchema: z.string(),
+    }).server(async ({ ms }, ctx) => {
+      await sleep(ms, ctx.signal);
+      return ms === 5 ? (1 as unknown as string) : "ok";
+    });
+    await collect(nessi({
+      provider: callsThenDone([
+        { id: "a", name: "read", args: { ms: 40 } },
+        { id: "b", name: "read", args: { ms: 5 } },
+        { id: "c", name: "read", args: { ms: 1 } },
+      ]),
+      store,
+      systemPrompt: "s",
+      input: "go",
+      tools: [read],
+    }));
+    expect((await storedResults(store)).map((result) => [result.callId, result.reason])).toEqual([
+      ["a", undefined], ["b", "output_validation_failed"], ["c", undefined],
     ]);
   });
 });

@@ -282,6 +282,16 @@ const groupToolCalls = (calls: ToolCallBlock[], toolMap: ReadonlyMap<string, Too
   return groups;
 };
 
+/** The stored parallel group of `call`, from the `parallel` marks nessi stored with the calls. */
+const parallelGroupOf = (calls: ToolCallBlock[], call: ToolCallBlock): ToolCallBlock[] => {
+  if (!call.parallel) return [call];
+  let start = calls.indexOf(call);
+  let end = start;
+  while (start > 0 && calls[start - 1]!.parallel) start--;
+  while (end < calls.length - 1 && calls[end + 1]!.parallel) end++;
+  return calls.slice(start, end + 1);
+};
+
 /** What the model reads for a call after a terminal tool of the same response. */
 const AFTER_TERMINAL_TOOL_RESULT = "Not run: an earlier call of this response ended the turn.";
 
@@ -871,6 +881,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     turnCtx: TurnContext,
     updateAggregateToolCall: UpdateAggregateToolCall,
     turnIssues?: { issues: LoopIssueAggregate[]; toolIssues: LoopToolIssueAggregate[] },
+    /** Ends a running server tool like the loop's abort; a parallel group adds its own stop. */
+    runSignal: AbortSignal = signal,
   ): AsyncGenerator<OutboundEvent> {
     const eventFields = { agentId, loopId, ...turnCtx };
     yield { type: "tool_execution_start", ...eventFields, callId: tc.id, name: tc.name, args: tc.args };
@@ -995,15 +1007,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
 
     const toolAbort = new AbortController();
-    const abortTool = () => toolAbort.abort(signal.reason);
-    if (signal.aborted) abortTool();
-    else signal.addEventListener("abort", abortTool, { once: true });
+    const abortTool = () => toolAbort.abort(runSignal.reason);
+    if (runSignal.aborted) abortTool();
+    else runSignal.addEventListener("abort", abortTool, { once: true });
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     let resolveLoopAborted: (() => void) | undefined;
     const loopAborted = new Promise<{ kind: "aborted" }>((resolve) => {
       resolveLoopAborted = () => resolve({ kind: "aborted" });
-      if (signal.aborted) resolveLoopAborted();
-      else signal.addEventListener("abort", resolveLoopAborted, { once: true });
+      if (runSignal.aborted) resolveLoopAborted();
+      else runSignal.addEventListener("abort", resolveLoopAborted, { once: true });
     });
     // Nested approval/client waits share the tool's deadline: toolAbort fires on timeout or loop abort.
     const pullWithinToolDeadline = async <T extends InboundEvent>(
@@ -1012,6 +1024,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       try {
         return await pullMatching(match, toolAbort.signal);
       } catch (error) {
+        if (runSignal.aborted) throw new LoopAbortedError();
         if (error instanceof PullCancelledError) return undefined;
         throw error;
       }
@@ -1115,6 +1128,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           const matchesCustomApproval = (event: InboundEvent): event is Extract<InboundEvent, { type: "approval_response" }> =>
             event.type === "approval_response" && event.callId === req.id;
           const releaseActionTurn = await takeActionTurn(toolAbort.signal);
+          if (!releaseActionTurn && runSignal.aborted) throw new LoopAbortedError();
           let response: Extract<InboundEvent, { type: "approval_response" }> | undefined;
           if (releaseActionTurn) try {
             let actionWaitStartedAt: number | undefined;
@@ -1172,6 +1186,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           const matchesClientResult = (event: InboundEvent): event is Extract<InboundEvent, { type: "tool_result" }> =>
             event.type === "tool_result" && event.callId === req.id;
           const releaseActionTurn = await takeActionTurn(toolAbort.signal);
+          if (!releaseActionTurn && runSignal.aborted) throw new LoopAbortedError();
           let response: Extract<InboundEvent, { type: "tool_result" }> | undefined;
           if (releaseActionTurn) try {
             let actionWaitStartedAt: number | undefined;
@@ -1239,7 +1254,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       finishToolExecution();
       yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result };
     } catch (error) {
-      if (error instanceof LoopAbortedError || signal.aborted) throw error;
+      if (error instanceof LoopAbortedError || runSignal.aborted) throw error;
       const issue = error instanceof ToolExecutionFailure
         ? error.issue
         : toolExecutionIssue("execution_failed", toErrorMessage(error), tc);
@@ -1247,8 +1262,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     } finally {
       finishToolExecution();
       if (timeoutHandle) clearTimeout(timeoutHandle);
-      signal.removeEventListener("abort", abortTool);
-      if (resolveLoopAborted) signal.removeEventListener("abort", resolveLoopAborted);
+      runSignal.removeEventListener("abort", abortTool);
+      if (resolveLoopAborted) runSignal.removeEventListener("abort", resolveLoopAborted);
     }
   }
 
@@ -1268,9 +1283,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
   ): AsyncGenerator<OutboundEvent> {
     type Step = { index: number } & ({ ok: true; result: IteratorResult<OutboundEvent> } | { ok: false; error: unknown });
     const finished = calls.map(() => Promise.withResolvers<void>());
+    // Ends the group's calls after one failed; the loop's abort ends them as well.
+    const stop = new AbortController();
+    const groupSignal = AbortSignal.any([signal, stop.signal]);
+    let closed = false;
     calls.forEach((call, index) => {
       resultWriters.set(call.id, async (message) => {
-        if (index > 0) await finished[index - 1]!.promise;
+        await Promise.all(finished.slice(0, index).map((each) => each.promise));
+        // After the group ended early, a late call does not change the history any more.
+        if (closed) throw new LoopAbortedError();
         await store.append(message);
       });
     });
@@ -1282,7 +1303,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     const startCalls = () => {
       while (!failure && running.size < maxParallelToolCalls && nextIndex < calls.length) {
         const index = nextIndex++;
-        const events = executeToolCall(calls[index]!, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
+        const events = executeToolCall(calls[index]!, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues, groupSignal);
         running.set(index, { events, step: advance(index, events) });
       }
     };
@@ -1297,7 +1318,10 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         if (!step.ok || step.result.done) {
           running.delete(step.index);
           finished[step.index]!.resolve();
-          if (!step.ok) failure ??= { error: step.error };
+          if (!step.ok && !failure) {
+            failure = { error: step.error };
+            stop.abort();
+          }
           startCalls();
           continue;
         }
@@ -1306,6 +1330,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       }
     } finally {
       // A consumer that stops early aborts the loop; the running calls then end on their own.
+      closed = true;
+      stop.abort();
       for (const { events, step } of running.values()) void step.then(() => events.return(undefined)).catch(() => {});
       for (const call of calls) resultWriters.delete(call.id);
       for (const call of finished) call.resolve();
@@ -1406,13 +1432,11 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     yield { type: "turn_start", agentId, loopId, ...turnCtx, resumed: true };
     try {
       // Calls run in order, one group at a time, and store their results in call order, so of the
-      // calls without a result only the first and the rest of its parallel group can have been
-      // running when the run stopped. A server tool that needs no approval may have had its
+      // calls without a result only the first and the rest of its stored parallel group can have
+      // been running when the run stopped. A server tool that needs no approval may have had its
       // effect; it runs again only when marked safe. A resumed loop runs its calls one by one.
       const [first] = pending;
-      const startedGroup = first
-        ? groupToolCalls(toolCallBlocks, toolSnapshot.toolMap).find((group) => group.includes(first)) ?? [first]
-        : [];
+      const startedGroup = first ? parallelGroupOf(toolCallBlocks, first) : [];
       for (const call of startedGroup.filter((block) => pending.includes(block))) {
         const tool = toolSnapshot.toolMap.get(call.name);
         if (tool?.kind !== "server" || tool.def.needsApproval || tool.def.replay === "safe") continue;
@@ -1762,9 +1786,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           call: { type: "tool_call" as const, id: newMalformedCallId(), name: malformedCallName(issue.name), args: {} },
           result: malformedCallResult(issue.message),
         }));
+        // Calls of a response cut off at the output limit never run (see cutOff below). The stored
+        // calls of a parallel group say so, for a resume after a crash.
+        const callGroups = stopReason === "max_tokens" ? [] : groupToolCalls(toolCalls, toolSnapshot.toolMap);
+        const parallelCallIds = new Set(callGroups.filter((group) => group.length > 1).flat().map((call) => call.id));
+        const storedBlocks = assistantBlocks.map((block) =>
+          block.type === "tool_call" && parallelCallIds.has(block.id) ? { ...block, parallel: true as const } : block);
         const assistantMessage = buildAssistantMessageFromContent(
           provider.model,
-          [...assistantBlocks, ...malformedCalls.map(({ call }) => call)],
+          [...storedBlocks, ...malformedCalls.map(({ call }) => call)],
           turnUsage,
           stopReason,
           provider.name,
@@ -1853,7 +1883,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         let terminalToolCompleted = false;
         try {
           let position = 0;
-          for (const group of groupToolCalls(cutOff ? [] : toolCalls, toolSnapshot.toolMap)) {
+          for (const group of callGroups) {
             position += group.length;
             if (group.length > 1) {
               yield* executeParallelToolCalls(group, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);

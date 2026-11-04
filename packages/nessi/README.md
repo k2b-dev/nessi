@@ -152,6 +152,13 @@ const readFile = defineTool({
   comes after the previous one was answered.
 - `aggregate.timing.toolExecutionMs` counts a group's wall time once, without
   the time spent waiting for the app.
+- The stored calls of a group carry `parallel: true`, so a resumed loop knows
+  which calls may have been running, also when a tool's `concurrency` changed
+  in between. Providers never see the mark.
+- If a call fails in a way that ends the loop (for example a store error), the
+  other calls of its group are cancelled. After an early stop, a call that
+  finished but still waited for an earlier one stores nothing; a resume answers
+  it as `not_returned`.
 
 ## Dynamic tools
 
