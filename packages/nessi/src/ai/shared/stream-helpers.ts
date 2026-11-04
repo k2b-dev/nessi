@@ -54,6 +54,8 @@ export const openSSEStream = async (
         method: "POST",
         headers,
         body: serializedBody,
+        // Credential headers such as x-api-key would follow a redirect to another origin.
+        redirect: "error",
         signal: controller.signal,
       }),
       new Promise<never>((_, reject) => {

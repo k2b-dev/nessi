@@ -168,10 +168,12 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
   const baseURL = (options?.baseURL ?? "https://generativelanguage.googleapis.com/v1beta/models").replace(/\/+$/, "");
   const apiKey = options?.apiKey ?? globalThis.process?.env?.GEMINI_API_KEY ?? globalThis.process?.env?.GOOGLE_API_KEY;
 
-  const urlFor = (path: "generateContent" | "streamGenerateContent") => {
-    const key = apiKey ? `?key=${encodeURIComponent(apiKey)}` : "";
-    const alt = path === "streamGenerateContent" ? `${key ? "&" : "?"}alt=sse` : "";
-    return `${baseURL}/${model}:${path}${key}${alt}`;
+  const urlFor = (path: "generateContent" | "streamGenerateContent") =>
+    `${baseURL}/${model}:${path}${path === "streamGenerateContent" ? "?alt=sse" : ""}`;
+  // The key goes in a header; URLs end up in proxy and access logs.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(apiKey ? { "x-goog-api-key": apiKey } : {}),
   };
 
   const buildBody = (request: GenerateRequest) => {
@@ -214,7 +216,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const requestId = createRequestId();
       const response = await fetchCompleteResponse(urlFor("generateContent"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(buildBody(request)),
         signal: request.signal,
       }, "gemini", options?.timeouts);
@@ -259,7 +261,7 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const result = await openSSEStream(
         urlFor("streamGenerateContent"),
-        { "Content-Type": "application/json" },
+        headers,
         buildBody(request),
         "gemini",
         request.signal,

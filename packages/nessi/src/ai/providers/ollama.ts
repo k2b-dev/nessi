@@ -236,6 +236,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(withExtraBody(body, request, options)),
+            redirect: "error",
             signal: controller.signal,
           }),
           new Promise<never>((_, reject) => {
