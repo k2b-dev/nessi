@@ -108,7 +108,8 @@ for (const testCase of providers) {
         },
         cancel() { cancelled = true; },
       })));
-      await expect(bounded(testCase.create({ totalMs: 100, idleMs: 75 }).complete({ messages: [] })))
+      // The idle limit is far above the 20 ms chunk gap, so only the total deadline can end it.
+      await expect(bounded(testCase.create({ totalMs: 100, idleMs: 900 }).complete({ messages: [] })))
         .rejects.toMatchObject({ kind: "timeout", scope: "provider_total", retryable: true });
       expect(cancelled).toBe(true);
     });
@@ -240,7 +241,7 @@ describe("complete timeouts over HTTP", () => {
           let chunks = 0;
           return new Response(new ReadableStream<Uint8Array>({
             async pull(controller) {
-              await new Promise((resolve) => setTimeout(resolve, 20));
+              await new Promise((resolve) => setTimeout(resolve, 50));
               if (cancelled) return;
               const frame = ++chunks < 5
                 ? { choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }] }
@@ -252,13 +253,14 @@ describe("complete timeouts over HTTP", () => {
           }), { headers: { "Content-Type": "text/event-stream" } });
         }
         nativeRequests++;
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 250));
         return Response.json({ choices: [{ message: { content: "HiHiHiHi" }, finish_reason: "stop" }] });
       },
     });
     try {
       const provider = openAICompatible({
-        name: "local", model: "test", baseURL: server.url.toString(), timeouts: { firstByteMs: 75, idleMs: 75, totalMs: 500 },
+        // Both answers take 250 ms, past firstByteMs; each gap is 50 ms, far below the other limits.
+        name: "local", model: "test", baseURL: server.url.toString(), timeouts: { firstByteMs: 150, idleMs: 400, totalMs: 900 },
       });
       const native = await bounded(provider.complete({ messages: [] }));
       const streamed = await bounded(completeFromStream(provider, { messages: [] }));

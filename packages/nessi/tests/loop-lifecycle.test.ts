@@ -56,19 +56,27 @@ describe("nessi loop lifecycle", () => {
       return ctx.requestApproval("continue?");
     });
 
-    const startedAt = Date.now();
-    const events = await collect(nessi({
+    const loop = nessi({
       provider: mockProvider(toolCallTurn("slow")),
       store: memoryStore(),
       systemPrompt: "sys",
       input: "go",
       tools: [slow],
       maxTurns: 1,
-    }));
+    });
+    // The approval arrives 40 ms after the request: after the shared deadline (60 ms from the tool
+    // start) but before a fresh one would end (60 ms from the request). Only timer order matters,
+    // so a slow machine cannot flip the outcome.
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
+      if (event.type === "tool_action_request" && event.kind === "approval") {
+        setTimeout(() => loop.push({ type: "approval_response", callId: event.callId, approved: true }), 40);
+      }
+    }
 
     const end = events.find((event) => event.type === "tool_execution_end");
     expect(end).toMatchObject({ isError: true, result: 'Tool "slow" timed out after 60ms.' });
-    expect(Date.now() - startedAt).toBeLessThan(100);
   });
 
   it("does not count the previous exchange when starting from a trailing user message", async () => {
