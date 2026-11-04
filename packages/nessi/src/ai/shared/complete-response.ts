@@ -1,8 +1,11 @@
 import type { ProviderTimeouts } from "../types.js";
-import { normalizeConnectionError, ProviderError, providerError } from "./errors.js";
+import { ERROR_BODY_LIMIT_BYTES, normalizeConnectionError, ProviderError, providerError } from "./errors.js";
 import type { ByteStreamReader } from "./sse.js";
 
-/** Buffer a native response with a total deadline and idle limits after headers. */
+/**
+ * Buffer a native response with a total deadline and idle limits after headers.
+ * Redirects fail: credential headers such as x-api-key would follow them to another origin.
+ */
 export const fetchCompleteResponse = async (
   url: string,
   init: RequestInit,
@@ -34,7 +37,7 @@ export const fetchCompleteResponse = async (
   try {
     totalTimeout = scheduleTimeout("provider_total", timeouts?.totalMs);
     const response = await Promise.race([
-      fetch(url, { ...init, signal: controller.signal }).then((response) => {
+      fetch(url, { ...init, redirect: "error", signal: controller.signal }).then((response) => {
         // A response can arrive just after an abort, including with custom fetch implementations.
         if (controller.signal.aborted) {
           void response.body?.cancel(controller.signal.reason).catch(() => {});
@@ -55,14 +58,29 @@ export const fetchCompleteResponse = async (
 
     const decoder = new TextDecoder();
     let text = "";
+    let errorBytes = 0;
+    let truncated = false;
     while (true) {
       clearTimeout(idleTimeout);
       idleTimeout = scheduleTimeout("provider_idle", timeouts?.idleMs);
       const { done, value } = await Promise.race([reader.read(), aborted]);
       if (done) break;
-      text += decoder.decode(value, { stream: true });
+      if (!value) continue;
+      if (response.ok) {
+        text += decoder.decode(value, { stream: true });
+        continue;
+      }
+      // An error body only feeds the error message.
+      const chunk = value.subarray(0, ERROR_BODY_LIMIT_BYTES - errorBytes);
+      errorBytes += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (errorBytes >= ERROR_BODY_LIMIT_BYTES) {
+        truncated = true;
+        void reader.cancel?.().catch(() => {});
+        break;
+      }
     }
-    text += decoder.decode();
+    if (!truncated) text += decoder.decode();
     // The last read can win the race against an abort that already happened.
     signal?.throwIfAborted();
     return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });

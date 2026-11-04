@@ -99,3 +99,19 @@ describe("normalizeProviderStream", () => {
     expect(providerError?.type === "issue" ? providerError.issue.kind : undefined).toBe("provider_error");
   });
 });
+
+describe("tool call arguments", () => {
+  it("never emits an executable call for non-object arguments", async () => {
+    // A broken adapter: the wire value reaches the normalizer unchecked.
+    const wireArgs: unknown = ["all"];
+    const events = await collect([
+      { type: "tool_call", callId: "c1", name: "wipe", args: wireArgs as Record<string, unknown> },
+      { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "tool_use" },
+    ]);
+    expect(events.some((event) => event.type === "block_end")).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "issue",
+      issue: expect.objectContaining({ kind: "malformed_tool_call", reason: "invalid_tool_arguments", callId: "c1", name: "wipe" }),
+    }));
+  });
+});
