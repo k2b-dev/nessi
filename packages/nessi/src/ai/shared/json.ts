@@ -46,3 +46,12 @@ export const toolArgumentsText = (value: unknown): string => {
 
 export const malformedToolArgumentsError = (label: string, name: string) =>
   new Error(`${label} returned malformed JSON arguments for "${name}".`);
+
+/** A stream record or response body: a JSON object, or `null` for anything else. */
+export const parseJsonRecord = <T>(input: string): T | null => {
+  const value = safeJsonParse<unknown>(input);
+  return value && typeof value === "object" && !Array.isArray(value) ? value as T : null;
+};
+
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);

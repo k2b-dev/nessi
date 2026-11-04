@@ -1,7 +1,7 @@
-import { buildRequest, invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
-import { ensureRecord, malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
+import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -53,6 +53,7 @@ type SSEChunk = {
     index: number;
     delta: {
       content?: string | null;
+      refusal?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
       reasoning_details?: ReasoningDetail[];
@@ -65,6 +66,7 @@ type SSEChunk = {
     message?: {
       role?: string;
       content?: string | null;
+      refusal?: string | null;
       reasoning?: string | null;
       reasoning_content?: string | null;
       reasoning_details?: ReasoningDetail[];
@@ -219,10 +221,16 @@ const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleCon
 };
 
 const parseCompletionResponse = async (response: Response, config: OpenAICompatibleConfig): Promise<GenerateResult> => {
-  const payload = safeJsonParse<SSEChunk>(await response.text());
+  const payload = parseJsonRecord<SSEChunk>(await response.text());
   if (!payload) throw invalidResponseError(config.name);
-
+  // Some gateways answer HTTP 200 with an error body.
+  const envelope = errorEnvelope(config.name, payload);
+  if (envelope) throw providerError(envelope);
   const choice = payload.choices?.[0];
+  // An empty message is a valid answer; a choice with neither a message nor a finish reason is not.
+  if (!choice || (!isRecord(choice.message) && !choice.finish_reason)) {
+    throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
+  }
   const message = choice?.message;
   const thinking: AssistantContentBlock[] = [];
   if (config.compat?.thinkingFormat !== "none") {
@@ -243,12 +251,15 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   });
 
   const usage = usageFromChunk(payload, config);
-  const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
+  // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
+  const refusal = message?.refusal || "";
+  const finishReason = refusal ? "error" : mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
+  const text = `${message?.content ?? ""}${refusal}`;
 
   return {
     message: buildAssistantMessageFromContent(
       config.model,
-      [...thinking, ...(message?.content ? [{ type: "text" as const, text: message.content }] : []), ...toolCalls],
+      [...thinking, ...(text ? [{ type: "text" as const, text }] : []), ...toolCalls],
       usage,
       finishReason,
       config.name,
@@ -405,6 +416,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
       };
       let deferredThinking = "";
+      let refused = false;
       const flushDeferredThinking = function* (): Generator<RawStreamEvent> {
         if (!deferredThinking) return;
         const delta = deferredThinking;
@@ -442,15 +454,15 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           sawDone = true;
           break;
         }
-        const chunk = safeJsonParse<SSEChunk>(event.data);
-        if (!chunk) continue;
-        if (chunk.error) {
-          const code = chunk.error.code;
-          yield {
-            type: "error",
-            error: `${config.name} stream error: ${chunk.error.message ?? "unknown error"}`,
-            retryable: typeof code === "number" ? isRetryableStatus(code) : true,
-          };
+        if (!event.data.trim()) continue;
+        const chunk = parseJsonRecord<SSEChunk>(event.data);
+        if (!chunk) {
+          yield malformedRecordError(config.name);
+          return;
+        }
+        const envelope = errorEnvelope(`${config.name} stream`, chunk);
+        if (envelope) {
+          yield { type: "error", ...envelope };
           return;
         }
 
@@ -473,6 +485,10 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           (delta.reasoning_details ?? []).forEach(collectReasoningDetail);
         }
         if (delta.content) yield { type: "text", delta: delta.content };
+        if (delta.refusal) {
+          refused = true;
+          yield { type: "text", delta: delta.refusal };
+        }
 
         if (delta.tool_calls) {
           for (const toolCall of delta.tool_calls) {
@@ -521,6 +537,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         return;
       }
 
+      if (refused) latestFinishReason = "error";
       if (pendingToolCalls.length > 0) {
         // A provider-side stop or a length cut stays visible even with pending calls.
         if (latestFinishReason !== "error" && latestFinishReason !== "max_tokens") latestFinishReason = "tool_use";

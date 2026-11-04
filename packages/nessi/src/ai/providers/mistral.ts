@@ -1,11 +1,11 @@
-import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, providerError, ProviderError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
+import { ensureRecord, isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -277,9 +277,15 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
         throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<MistralChunk>(await response.text());
+      const payload = parseJsonRecord<MistralChunk>(await response.text());
       if (!payload) throw invalidResponseError("mistral");
+      const envelope = errorEnvelope("mistral", payload);
+      if (envelope) throw providerError(envelope);
       const choice = payload.choices?.[0];
+      // An empty message is a valid answer; a choice with neither a message nor a finish reason is not.
+      if (!choice || (!isRecord(choice.message) && !choice.finish_reason)) {
+        throw new ProviderError("mistral returned no choices.", { kind: "provider_error", retryable: true });
+      }
       const idPrefix = fallbackToolCallPrefix("mistral");
       const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => {
         const name = call.function?.name ?? "";
@@ -366,8 +372,17 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           sawDone = true;
           break;
         }
-        const chunk = safeJsonParse<MistralChunk>(event.data);
-        if (!chunk) continue;
+        if (!event.data.trim()) continue;
+        const chunk = parseJsonRecord<MistralChunk>(event.data);
+        if (!chunk) {
+          yield malformedRecordError("mistral");
+          return;
+        }
+        const envelope = errorEnvelope("mistral stream", chunk);
+        if (envelope) {
+          yield { type: "error", ...envelope };
+          return;
+        }
         const choice = chunk.choices?.[0];
         const usage = usageFromChunk(chunk, options);
         if (!choice) {

@@ -263,6 +263,13 @@ for await (const event of provider.stream({ messages })) {
 }
 ```
 
+A stream record that is not a JSON object, or an error record inside the
+stream (`{ error: … }`, Mistral's `{ object: "error" }`, Anthropic's
+`{ type: "error" }`), ends the stream with a `provider_error` issue, even when a
+normal end follows. Native `complete()` rejects HTTP 200 bodies that carry an
+error or no result, and a Gemini prompt block. An OpenAI `refusal` arrives as
+text and ends the response with stop reason `error`, like a content filter.
+
 Malformed tool streams are not provider connection errors. Handle them separately
 if the UI wants to show model/tool-call diagnostics:
 

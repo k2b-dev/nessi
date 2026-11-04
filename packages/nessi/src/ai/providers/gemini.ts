@@ -1,11 +1,11 @@
-import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, providerError, ProviderError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { isRecord, malformedToolArgumentsError, parseJsonRecord, parseToolArguments, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -226,8 +226,18 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
         throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<GeminiResponse>(await response.text());
+      const payload = parseJsonRecord<GeminiResponse>(await response.text());
       if (!payload) throw invalidResponseError("gemini");
+      const envelope = errorEnvelope("gemini", payload);
+      if (envelope) throw providerError(envelope);
+      // A blocked prompt has no candidates; the stream reports the same as a provider error.
+      const blockReason = payload.promptFeedback?.blockReason;
+      if (blockReason) throw new ProviderError(`gemini blocked the prompt (${blockReason}).`, { kind: "provider_error", retryable: false });
+      const first = payload.candidates?.[0];
+      // A safety stop may carry no content; a candidate with neither is not an answer.
+      if (!first || (!isRecord(first.content) && !first.finishReason)) {
+        throw new ProviderError("gemini returned no candidates.", { kind: "provider_error", retryable: true });
+      }
       const candidate = payload.candidates?.[0];
       const content: AssistantContentBlock[] = [];
       let toolCount = 0;
@@ -282,8 +292,17 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       let rawFinishReason: string | undefined;
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
-        const payload = safeJsonParse<GeminiResponse>(event.data);
-        if (!payload) continue;
+        if (!event.data.trim()) continue;
+        const payload = parseJsonRecord<GeminiResponse>(event.data);
+        if (!payload) {
+          yield malformedRecordError("gemini");
+          return;
+        }
+        const envelope = errorEnvelope("gemini stream", payload);
+        if (envelope) {
+          yield { type: "error", ...envelope };
+          return;
+        }
         if (payload.usageMetadata) latestUsage = usageFromResponse(payload, options);
         // A blocked prompt has no candidates and therefore no finish reason; it is not a truncated stream.
         const blockReason = payload.promptFeedback?.blockReason;
