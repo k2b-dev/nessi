@@ -52,15 +52,20 @@ export const openSSEStream = async (
     ? Date.now() + timeouts.firstByteMs
     : undefined;
   try {
+    const request = fetch(url, {
+      method: "POST",
+      headers,
+      body: serializedBody,
+      // Credential headers such as x-api-key would follow a redirect to another origin.
+      redirect: "error",
+      signal: controller.signal,
+    });
+    // A fetch that ignores the signal can still answer after the deadline; release that body.
+    void request.then((late) => {
+      if (controller.signal.aborted) void late.body?.cancel().catch(() => {});
+    }, () => {});
     response = await Promise.race([
-      fetch(url, {
-        method: "POST",
-        headers,
-        body: serializedBody,
-        // Credential headers such as x-api-key would follow a redirect to another origin.
-        redirect: "error",
-        signal: controller.signal,
-      }),
+      request,
       new Promise<never>((_, reject) => {
         if (!timeouts?.firstByteMs || timeouts.firstByteMs <= 0) return;
         firstByteTimeout = setTimeout(() => {

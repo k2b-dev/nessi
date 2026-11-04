@@ -41,9 +41,14 @@ export const complete = async (
         }
         if (issue.kind === "provider_error") {
           request.signal?.throwIfAborted();
-          const { kind, message, ...details } = issue;
+          const { kind, message, notSent, ...details } = issue;
           // A request nessi could not build keeps that kind; it was never sent.
-          throw new ProviderError(message, { kind: details.code === "invalid_request" ? "invalid_request" : kind, ...details });
+          throw new ProviderError(message, { kind: notSent ? "invalid_request" : kind, ...details });
+        }
+        // `complete()` has no recovery loop: a call that cannot run must not vanish from the answer.
+        if (issue.kind === "malformed_tool_call") {
+          request.signal?.throwIfAborted();
+          throw new ProviderError(issue.message, { kind: "provider_error", retryable: true, code: "malformed_tool_call" });
         }
         break;
       }

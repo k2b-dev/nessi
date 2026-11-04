@@ -78,10 +78,9 @@ const malformedArguments: unknown[] = ['{"target":', "[]", '"all"', 42, [], ["al
 describe("tool arguments", () => {
   for (const { name, create, valid, native, stream, answer } of cases) {
     for (const args of malformedArguments) {
-      it(`${name} complete() returns no executable call for ${JSON.stringify(args)}`, async () => {
+      it(`${name} complete() rejects ${JSON.stringify(args)} instead of returning {}`, async () => {
         stubFetch(() => completionStream(native(args)));
-        const { message } = await complete(create(), request);
-        expect(message.content.some((block) => block.type === "tool_call")).toBe(false);
+        await expect(complete(create(), request)).rejects.toMatchObject({ code: "malformed_tool_call", retryable: true });
       });
 
       it(`${name} stream reports ${JSON.stringify(args)} as a malformed call`, async () => {

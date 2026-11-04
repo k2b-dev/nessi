@@ -22,7 +22,7 @@ scope.
    - Use the `@k2b/nessi` root exports when the user wants an agent loop that executes tools, stores conversation history, handles approvals, or compacts context.
 4. Produce working TypeScript that matches the current public API:
    - Root agent APIs come from `@k2b/nessi`.
-   - Chat provider constructors come from `@k2b/nessi/ai`, then expose `complete(request)` and `stream(request)`. The transcription constructor takes `(model, options)` with a required `baseURL`.
+   - The chat provider (`openAICompatible()`) comes from `@k2b/nessi/ai` and exposes `stream(request)`; `complete(provider, request)` from the same module collects one result. The transcription constructor takes `(model, options)` with a required `baseURL`.
 
 ## Reference routing
 

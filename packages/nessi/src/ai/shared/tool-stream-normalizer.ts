@@ -1,4 +1,4 @@
-import { ProviderError } from "./errors.js";
+import { ProviderError, runtimeErrorCode } from "./errors.js";
 import { safeJsonParse, stringifyJson } from "./json.js";
 import type {
   AssistantBlockKind,
@@ -374,16 +374,15 @@ export async function* normalizeProviderStream(
       });
       return;
     }
-    // A request nessi could not build fails the same way on every attempt; keep that visible.
-    const code = error instanceof ProviderError
-      ? (error.kind === "invalid_request" ? "invalid_request" : error.code)
-      : undefined;
+    // A request nessi could not build was never sent and fails the same way on every attempt.
+    const code = error instanceof ProviderError ? error.code : runtimeErrorCode(error);
     yield* emitIssue({
       kind: "provider_error",
       message: error instanceof Error ? error.message : String(error),
       retryable: error instanceof ProviderError ? error.retryable : true,
       ...(code !== undefined ? { code } : {}),
       ...(error instanceof ProviderError && error.status !== undefined ? { status: error.status } : {}),
+      ...(error instanceof ProviderError && error.kind === "invalid_request" ? { notSent: true } : {}),
     });
     return;
   }

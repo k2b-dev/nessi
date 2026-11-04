@@ -153,12 +153,48 @@ describe("requests nessi cannot build", () => {
         stubFetch(() => { sent++; return new Response("{}"); });
         const error = await rejection(complete(create(), input));
         expect(error).toBeInstanceOf(ProviderError);
-        expect(error).toMatchObject({ kind: "invalid_request", retryable: false, code: "invalid_request" });
+        expect(error).toMatchObject({ kind: "invalid_request", retryable: false });
         const issues = [];
         for await (const event of create().stream(input)) if (event.type === "issue") issues.push(event.issue);
-        expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false, code: "invalid_request" })]);
+        expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false, notSent: true })]);
         expect(sent).toBe(0);
       });
     }
   }
+});
+
+describe("stream failures keep their details", () => {
+  const provider = () => providers[0]!.create();
+
+  it("keeps the runtime code when the connection drops mid-stream", async () => {
+    let pulls = 0;
+    stubFetch(() => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls++ === 0) controller.enqueue(new TextEncoder().encode('data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}\n\n'));
+        else controller.error(new TypeError("fetch failed", { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) }));
+      },
+    }), { headers: { "Content-Type": "text/event-stream" } }));
+    expect(await rejection(complete(provider(), request))).toMatchObject({ kind: "provider_error", retryable: true, code: "ECONNRESET" });
+  });
+
+  it("reads a whole error body when idleMs is disabled", async () => {
+    stubFetch(rateLimited);
+    for (const idleMs of [0, -1]) {
+      const create = () => endpoint("openai", { baseURL: "https://example.test", timeouts: { idleMs } });
+      expect(await rejection(complete(create(), request))).toMatchObject({ status: 429, code: "rate_limit_exceeded" });
+    }
+  });
+
+  it("releases a response that arrives after the first-byte deadline", async () => {
+    let cancelled = false;
+    // A custom fetch that ignores the abort signal.
+    globalThis.fetch = Object.assign(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }));
+    }, { preconnect: () => {} });
+    const late = endpoint("openai", { baseURL: "https://example.test", timeouts: { firstByteMs: 5 } });
+    expect(await rejection(complete(late, request))).toMatchObject({ kind: "timeout", scope: "provider_first_byte" });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(cancelled).toBe(true);
+  });
 });

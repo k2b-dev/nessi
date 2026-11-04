@@ -87,7 +87,9 @@ export const readErrorBody = async (response: Response, limits: ErrorBodyLimits 
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     while (true) {
-      const waits = [limits.idleMs, limits.deadlineAt === undefined ? undefined : limits.deadlineAt - Date.now()]
+      // A non-positive idle limit is disabled; an absolute deadline that has passed ends the read.
+      const idleMs = limits.idleMs !== undefined && limits.idleMs > 0 ? limits.idleMs : undefined;
+      const waits = [idleMs, limits.deadlineAt === undefined ? undefined : limits.deadlineAt - Date.now()]
         .filter((ms): ms is number => ms !== undefined && Number.isFinite(ms));
       const waitMs = waits.length > 0 ? Math.min(...waits) : undefined;
       if (waitMs !== undefined && waitMs <= 0) break;
@@ -160,8 +162,11 @@ const errorCode = (error: unknown) =>
  * A request whose connection failed; `code` is the runtime's, such as `ECONNREFUSED`. Bun sets it
  * on the error, Node on its `cause`.
  */
+/** The runtime's error code (`ECONNRESET`, …); Bun sets it on the error, Node on its `cause`. */
+export const runtimeErrorCode = (error: unknown) => errorCode(error) ?? (error instanceof Error ? errorCode(error.cause) : undefined);
+
 export const normalizeConnectionError = (label: string, error: unknown) => {
-  const code = errorCode(error) ?? (error instanceof Error ? errorCode(error.cause) : undefined);
+  const code = runtimeErrorCode(error);
   return { error: formatConnectionError(label, error), retryable: true, ...(code !== undefined ? { code } : {}) };
 };
 

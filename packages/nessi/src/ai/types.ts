@@ -113,11 +113,10 @@ export type ProviderIssue = {
   retryable: boolean;
   /** HTTP status of a rejected request. */
   status?: number;
-  /**
-   * Provider error code from the body, the runtime's connection error code, or `invalid_request`
-   * when nessi could not build the request and sent nothing.
-   */
+  /** Provider error code from the body, or the runtime's connection error code. */
   code?: string;
+  /** nessi could not build the request (unsupported input, unserializable values) and sent nothing. */
+  notSent?: true;
   /** How long the provider asked the caller to wait (`retry-after-ms` or `retry-after`). */
   retryAfterMs?: number;
   contextOverflow?: boolean;

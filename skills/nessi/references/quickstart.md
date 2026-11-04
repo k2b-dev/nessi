@@ -6,8 +6,8 @@ Use the root package when the app needs a managed agent loop with tools, storage
 
 The provider layer gives applications a common `Provider` interface with:
 
-- `complete(request)` for one-shot generation
-- `stream(request)` for streaming generation
+- `stream(request)` for streaming generation, the only request path
+- `complete(provider, request)` from `@k2b/nessi/ai` for one-shot generation; it collects the stream
 
 The provider layer does not run an agent loop, persist messages, or execute tools.
 For schema-valid typed task results, prefer `nessi.structured()` from the root
