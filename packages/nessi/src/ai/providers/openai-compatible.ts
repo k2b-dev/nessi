@@ -1,7 +1,7 @@
-import { isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -220,7 +220,7 @@ const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleCon
 
 const parseCompletionResponse = async (response: Response, config: OpenAICompatibleConfig): Promise<GenerateResult> => {
   const payload = safeJsonParse<SSEChunk>(await response.text());
-  if (!payload) throw new Error(`${config.name} returned invalid JSON.`);
+  if (!payload) throw invalidResponseError(config.name);
 
   const choice = payload.choices?.[0];
   const message = choice?.message;
@@ -235,12 +235,12 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
     }
   }
   const idPrefix = fallbackToolCallPrefix(config.name);
-  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => ({
-    type: "tool_call",
-    id: call.id ?? `${idPrefix}-${index}`,
-    name: call.function?.name ?? "",
-    args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
-  }));
+  const toolCalls: ToolCallBlock[] = (message?.tool_calls ?? []).map((call, index) => {
+    const name = call.function?.name ?? "";
+    const args = parseToolArguments(call.function?.arguments);
+    if (!args) throw malformedToolArgumentsError(config.name, name);
+    return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
+  });
 
   const usage = usageFromChunk(payload, config);
   const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
@@ -297,7 +297,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
     },
 
     async complete(request: GenerateRequest): Promise<GenerateResult> {
-      const messages = convertMessages(request.messages, request.systemPrompt, config);
+      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
       const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
       const body: Record<string, unknown> = {
         model: config.model,
@@ -322,13 +322,13 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       const response = await fetchCompleteResponse(`${baseURL}/chat/completions`, {
         method: "POST",
         headers,
-        body: JSON.stringify(withExtraBody(body, request, config)),
+        body: serializeRequest(config.name, withExtraBody(body, request, config)),
         signal: request.signal,
       }, config.name, config.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError(config.name, response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       return parseCompletionResponse(response, config);
@@ -336,7 +336,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
 
     stream(request: GenerateRequest): AsyncIterable<StreamEvent> {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
-      const messages = convertMessages(request.messages, request.systemPrompt, config);
+      const messages = buildRequest(config.name, () => convertMessages(request.messages, request.systemPrompt, config));
       const tools = request.tools?.length ? toOpenAITools(request.tools) : undefined;
 
       const body: Record<string, unknown> = {
@@ -481,7 +481,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
             if (!existing) {
               const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               const buffer = {
                 callId,
                 name,
@@ -493,7 +493,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               if (argsDelta) existing.argsBuffer += argsDelta;
               const wasStarted = existing.started;
               yield* startToolCall(existing);

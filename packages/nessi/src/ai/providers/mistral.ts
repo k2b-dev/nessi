@@ -1,11 +1,11 @@
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -249,7 +249,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
     async complete(request: GenerateRequest): Promise<GenerateResult> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt, options),
+        messages: buildRequest("mistral", () => convertMessages(request.messages, request.systemPrompt, options)),
         stream: false,
       };
       if (request.tools?.length) {
@@ -268,25 +268,25 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${options?.apiKey ?? globalThis.process?.env?.MISTRAL_API_KEY ?? ""}`,
         },
-        body: JSON.stringify(withExtraBody(body, request, options)),
+        body: serializeRequest("mistral", withExtraBody(body, request, options)),
         signal: request.signal,
       }, "mistral", options?.timeouts);
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("mistral", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<MistralChunk>(await response.text());
-      if (!payload) throw new Error("mistral returned invalid JSON.");
+      if (!payload) throw invalidResponseError("mistral");
       const choice = payload.choices?.[0];
       const idPrefix = fallbackToolCallPrefix("mistral");
-      const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => ({
-        type: "tool_call",
-        id: call.id ?? `${idPrefix}-${index}`,
-        name: call.function?.name ?? "",
-        args: ensureRecord(safeJsonParse(call.function?.arguments ?? "{}")),
-      }));
+      const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => {
+        const name = call.function?.name ?? "";
+        const args = parseToolArguments(call.function?.arguments);
+        if (!args) throw malformedToolArgumentsError("mistral", name);
+        return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
+      });
       const usage = usageFromChunk(payload, options);
       const finishReason = mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
       const content = [...contentBlocks(choice?.message?.content), ...toolCalls];
@@ -303,7 +303,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       const raw = async function* (): AsyncIterable<RawStreamEvent> {
       const body: Record<string, unknown> = {
         model,
-        messages: convertMessages(request.messages, request.systemPrompt, options),
+        messages: buildRequest("mistral", () => convertMessages(request.messages, request.systemPrompt, options)),
         stream: true,
       };
       if (request.tools?.length) {
@@ -398,7 +398,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
             if (!existing) {
               const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               const buffer = {
                 callId,
                 name,
@@ -410,7 +410,7 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
-              const argsDelta = toolCall.function?.arguments ?? "";
+              const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               if (argsDelta) existing.argsBuffer += argsDelta;
               const wasStarted = existing.started;
               yield* startToolCall(existing);
