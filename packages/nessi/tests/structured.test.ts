@@ -182,14 +182,22 @@ describe("nessi.structured", () => {
     ["interrupted", "provider_stopped"],
     ["aborted", "aborted"],
   ] as const) {
-    it(`never accepts or repairs a ${stopReason} response, even with schema-valid JSON`, async () => {
-      for (const structuredOutput of [true, false]) {
+    it(`never accepts or repairs a ${stopReason} response`, async () => {
+      // Each field alone must stop it, with valid output (no accept) and invalid output (no repair).
+      for (const [structuredOutput, field, text] of [
+        [true, "finishReason", '{"ok":true}'],
+        [false, "stopReason", '{"ok":true}'],
+        [false, "finishReason", "not json"],
+        [true, "stopReason", "not json"],
+      ] as const) {
         let calls = 0;
         const provider: Provider = {
           ...completeProvider([], structuredOutput).provider,
           complete: async () => {
-            const result = textResult('{"ok":true}', calls++);
-            return { ...result, finishReason: stopReason, message: { ...result.message, stopReason } };
+            const result = textResult(text, calls++);
+            return field === "finishReason"
+              ? { ...result, finishReason: stopReason }
+              : { ...result, message: { ...result.message, stopReason } };
           },
         };
         const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
@@ -214,6 +222,40 @@ describe("nessi.structured", () => {
     const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
       .catch((error: unknown) => error);
     expect(caught).toMatchObject({ code: "truncated", details: { attempts: 2, aggregate: { usage: { total: 4 } } } });
+  });
+
+  for (const [stopReason, code] of [["max_tokens", "truncated"], ["interrupted", "provider_stopped"], ["aborted", "aborted"]] as const) {
+    it(`tool-loop mode rejects a result submitted in a ${stopReason} response`, async () => {
+      const lookup = defineTool({ name: "lookup", description: "Look up", inputSchema: z.object({}) }).server(async () => "x");
+      const provider = mockProviderMultiTurn(() => [
+        { type: "tool_call", callId: "submit-1", name: "submit_result", args: { ok: true } },
+        { type: "usage", usage: { input: 3, output: 2, total: 5 }, finishReason: stopReason },
+      ]);
+      const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }), tools: [lookup] })
+        .catch((error: unknown) => error);
+      expect(caught).toBeInstanceOf(StructuredOutputError);
+      expect(caught).toMatchObject({ code, details: { aggregate: { usage: { total: 5 } } } });
+    });
+  }
+
+  it("reports the generation time of a failed request", async () => {
+    const originalNow = Date.now;
+    let now = 1_000;
+    Date.now = () => now;
+    try {
+      const provider: Provider = {
+        ...completeProvider([], false).provider,
+        complete: async () => {
+          now += 500;
+          throw new Error("upstream unavailable");
+        },
+      };
+      const caught = await nessi.structured({ provider, input: "Return ok.", output: z.object({ ok: z.boolean() }) })
+        .catch((error: unknown) => error);
+      expect(caught).toMatchObject({ code: "loop_failed", details: { aggregate: { timing: { wallMs: 500, generationMs: 500 } } } });
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   it("keeps the usage of the first attempt when the repair request fails", async () => {

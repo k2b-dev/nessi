@@ -196,9 +196,10 @@ performs one repair attempt if the first response is invalid.
 Failures throw `StructuredOutputError` with a `code`: `invalid_output`,
 `truncated` (the response hit the output token limit), `provider_stopped` (the
 provider ended it with an error, a refusal, or an interruption), `aborted`,
-`loop_failed`, `max_turns`, or `unsupported_tool`. A response that did not end
-normally is never accepted or repaired. `details.aggregate` carries the usage
-of every attempt that ran.
+`loop_failed`, `max_turns`, or `unsupported_tool`. In both modes, output from a
+response that did not end normally is never accepted, and direct mode never
+repairs it. Provider and output failures carry `details.aggregate` with the
+usage and timing of the responses that completed.
 
 `nessi.structured()` may use server tools:
 

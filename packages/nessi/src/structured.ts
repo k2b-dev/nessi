@@ -11,6 +11,7 @@ import { defineTool } from "./tools.js";
 import { createLoopId, toErrorMessage } from "./utils.js";
 import type {
   AssistantMessage,
+  AssistantStopReason,
   ContentPart,
   DoneReason,
   JsonSchemaObject,
@@ -257,8 +258,10 @@ const resultToTurn = (result: GenerateResult): LoopTurnAggregate => {
 };
 
 /** A response that did not end normally; its text is never accepted or repaired. */
-const unfinishedResponse = (result: GenerateResult): { message: string; code: StructuredOutputErrorCode } | undefined => {
-  const reasons = new Set([result.finishReason, result.message.stopReason]);
+const unfinishedResponse = (
+  ...stopReasons: Array<AssistantStopReason | undefined>
+): { message: string; code: StructuredOutputErrorCode } | undefined => {
+  const reasons = new Set(stopReasons);
   if (reasons.has("aborted")) return { message: "Provider response was aborted.", code: "aborted" };
   if (reasons.has("max_tokens")) {
     return { message: "Provider response stopped at the output token limit before the structured output was complete.", code: "truncated" };
@@ -331,15 +334,15 @@ const directStructured = async <TOutput extends z.ZodType>(
     try {
       result = await options.provider.complete(request);
     } catch (error) {
+      generationMs += Math.max(0, Date.now() - requestStartedAt);
       // Match the tool-loop mode, which reports provider failures as StructuredOutputError.
       const code = options.signal?.aborted ? "aborted" : "loop_failed";
       throw failure(toErrorMessage(error), code, { cause: error });
-    } finally {
-      generationMs += Math.max(0, Date.now() - requestStartedAt);
     }
+    generationMs += Math.max(0, Date.now() - requestStartedAt);
     attempts.push(result);
     if (options.signal?.aborted) throw failure("Structured output was aborted.", "aborted");
-    const unfinished = unfinishedResponse(result);
+    const unfinished = unfinishedResponse(result.finishReason, result.message.stopReason);
     if (unfinished) throw failure(unfinished.message, unfinished.code);
     return result;
   };
@@ -427,14 +430,16 @@ const toolLoopStructured = async <TOutput extends z.ZodType>(
   const toolSource = options.tools ?? [];
 
   let submitted: z.infer<TOutput> | undefined;
+  let submittedCallId: string | undefined;
   const submitDef = defineTool({
     name: SUBMIT_RESULT_TOOL_NAME,
     description: "Submit the final structured result. Call this exactly once when the task is complete.",
     inputSchema: options.output,
     outputSchema: z.object({ accepted: z.literal(true) }),
   });
-  const submitTool = submitDef.server(async (input) => {
+  const submitTool = submitDef.server(async (input, ctx) => {
     submitted = input;
+    submittedCallId = ctx.callId;
     return { accepted: true };
   });
   (submitTool.def as { terminal?: boolean }).terminal = true;
@@ -507,6 +512,10 @@ const toolLoopStructured = async <TOutput extends z.ZodType>(
       aggregate: loopEnd.aggregate,
     });
   }
+  // The loop runs complete tool calls of a response that stopped early; a result needs a finished one.
+  const submittingTurn = loopEnd.aggregate.turns.find((turn) => turn.toolCalls.some((call) => call.callId === submittedCallId));
+  const unfinished = unfinishedResponse(submittingTurn?.stopReason, submittingTurn?.message.stopReason);
+  if (unfinished) throw new StructuredOutputError(unfinished.message, unfinished.code, { aggregate: loopEnd.aggregate });
 
   const lastMessage = message ?? loopEnd.aggregate.turns.at(-1)?.message;
   if (!lastMessage) {
