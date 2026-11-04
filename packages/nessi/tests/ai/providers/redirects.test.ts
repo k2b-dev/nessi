@@ -32,18 +32,24 @@ const redirectingEndpoint = () => {
       return Response.json({});
     },
   });
-  // A different host name is a different origin, also on loopback.
+  // Another port is another origin.
   const origin = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch: (request) => new Response(null, {
       status: 307,
-      headers: { location: `http://localhost:${target.port}${new URL(request.url).pathname}` },
+      headers: { location: `http://127.0.0.1:${target.port}${new URL(request.url).pathname}` },
     }),
   });
   servers.push(target, origin);
   return { baseURL: `http://127.0.0.1:${origin.port}`, leaked };
 };
+
+it("the redirect harness forwards custom headers when fetch follows redirects", async () => {
+  const { baseURL, leaked } = redirectingEndpoint();
+  await fetch(`${baseURL}/v1/messages`, { method: "POST", headers: { "x-api-key": SECRET }, body: "{}" });
+  expect(leaked).toEqual([expect.objectContaining({ "x-api-key": SECRET })]);
+});
 
 const providers: Array<{ name: string; create: (baseURL: string) => Provider }> = [
   { name: "anthropic", create: (baseURL) => anthropic("test", { apiKey: SECRET, baseURL }) },
