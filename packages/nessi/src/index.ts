@@ -81,5 +81,4 @@ export type {
   CompactDoneReason,
   CompactEvent,
   CompactLoop,
-  // Credits
 } from "./types.js";

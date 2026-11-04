@@ -36,6 +36,7 @@ import {
   createLoopId,
   estimateContextTokens,
   projectHistoricalToolResults,
+  rejectRemovedOptions,
   toErrorMessage,
   truncateToolResults,
   zeroUsage,
@@ -492,6 +493,10 @@ const coalesceOutboundEvents = async function* (
 // ----------------------------------------------------------------------------
 
 export const nessi = (options: NessiOptions): NessiLoop => {
+  rejectRemovedOptions(options, {
+    creditStore: "Check budgets in the application, for example from loop_end.aggregate.usage.",
+    disableReasoning: 'Use reasoningEffort: "none".',
+  }, "nessi()");
   const {
     agentId = "main",
     loopId: requestedLoopId,
@@ -1394,7 +1399,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
         /**
          * Ends a turn that did not complete normally: emits turn_end, counts usage the provider
-         * already reported (aggregate and credits) and optionally keeps partial content in history.
+         * already reported (aggregate) and optionally keeps partial content in history.
          */
         const closeUnfinishedTurn = async function* (
           reason: "interrupted" | "error",
@@ -1402,7 +1407,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         ): AsyncGenerator<OutboundEvent> {
           const message = makePartialMessage(reason);
           const usage = turnUsageReported ? turnUsage : undefined;
-          // Storage or credit failures are reported but must not keep the turn open.
+          // Storage failures are reported but must not keep the turn open.
           const reportFailure = function* (what: string, error: unknown): Generator<OutboundEvent> {
             const issue = runtimeIssue(new Error(`${what}: ${toErrorMessage(error)}`));
             recordIssue(issue, turnIssues);

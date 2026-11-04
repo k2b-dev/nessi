@@ -68,8 +68,7 @@ Every outbound event from one `nessi()` run carries the same `loopId`. Pass your
 also when a turn fails or is aborted. A turn that fails or is aborted while the
 model is still answering carries the partial message with `stopReason`
 `"error"` or `"interrupted"`; an abort during tool execution carries the stored
-message. Usage the provider already reported counts in the aggregate and
-against the credit store. Partial content is stored, except for a context
+message. Usage the provider already reported counts in the aggregate. Partial content is stored, except for a context
 overflow, which is retried after compaction or ends the loop. When the provider
 itself stops an answer (`finishReason: "error"`, e.g. a content or safety
 filter), its tool calls are not executed, not even by a later resume, and the

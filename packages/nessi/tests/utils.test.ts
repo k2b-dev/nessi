@@ -199,3 +199,22 @@ describe("closeUnansweredToolCalls", () => {
     expect(closeUnansweredToolCalls(messages)).toEqual(messages);
   });
 });
+
+describe("options removed in 1.0", () => {
+  it("fail instead of silently changing a run", async () => {
+    const { nessi } = await import("../src/index.js");
+    const { mockProvider } = await import("./mock-provider.js");
+    const { memoryStore } = await import("../src/stores.js");
+    const { z } = await import("zod");
+    const legacy: Record<string, unknown> = { creditStore: { remaining: async () => 1, deduct: async () => {} } };
+    expect(() => nessi({ provider: mockProvider([]), store: memoryStore(), systemPrompt: "s", ...legacy }))
+      .toThrow('the "creditStore" option was removed');
+    const structuredLegacy: Record<string, unknown> = { tools: [] };
+    await expect(nessi.structured({ provider: mockProvider([]), input: "x", output: z.object({}), ...structuredLegacy }))
+      .rejects.toThrow("use nessi() for tool work");
+    // Pure correlation options that no longer do anything stay harmless.
+    const tagged: Record<string, unknown> = { agentId: "worker" };
+    await expect(nessi.structured({ provider: mockProvider([{ type: "text", delta: "{}" }, { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "stop" }]), input: "x", output: z.object({}), ...tagged }))
+      .resolves.toMatchObject({ output: {} });
+  });
+});

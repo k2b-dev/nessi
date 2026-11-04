@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { aggregateFromTurns, buildLoopTiming } from "./aggregates.js";
 import { extractAssistantText } from "./ai/shared/messages.js";
-import { createLoopId, toErrorMessage } from "./utils.js";
+import { createLoopId, rejectRemovedOptions, toErrorMessage } from "./utils.js";
 import type {
   AssistantMessage,
   AssistantStopReason,
@@ -387,6 +387,12 @@ const directStructured = async <TOutput extends z.ZodType>(
 export const structured = async <TOutput extends z.ZodType>(
   options: StructuredOptions<TOutput>,
 ): Promise<StructuredResult<z.infer<TOutput>>> => {
+  rejectRemovedOptions(options, {
+    tools: "nessi.structured() makes one provider call; use nessi() for tool work.",
+    maxTurns: "nessi.structured() makes one provider call; use nessi() for tool work.",
+    onEvent: "nessi.structured() makes one provider call; use nessi() for tool work.",
+    disableReasoning: 'Use reasoningEffort: "none".',
+  }, "nessi.structured()");
   const loopId = options.loopId?.trim() ? options.loopId : createLoopId();
   const inputMessage = normalizeStructuredInput(options.input);
   const jsonSchema = schemaFor(options.output);
