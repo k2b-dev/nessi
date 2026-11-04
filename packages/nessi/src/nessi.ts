@@ -738,12 +738,15 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     updateAggregateToolCall: UpdateAggregateToolCall,
     issue: NessiIssue,
     turnIssues?: { issues: LoopIssueAggregate[]; toolIssues: LoopToolIssueAggregate[] },
+    /** Ends the tool's execution timing before the end event, for calls that started running. */
+    finishExecution?: () => void,
   ): AsyncGenerator<OutboundEvent> {
     const result = issueToToolResult(issue);
     await appendToolResult(tc.id, tc.name, result, true);
     updateAggregateToolCall(tc.id, { result, isError: true });
     recordIssue(issue, turnIssues);
     yield issueEvent(issue, turnCtx);
+    finishExecution?.();
     yield {
       type: "tool_execution_end",
       agentId,
@@ -818,12 +821,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       );
       if (!pulled.ok) {
         const issue = timeoutIssue();
-        const result = issueToToolResult(issue);
-        await appendToolResult(tc.id, tc.name, result, true);
-        updateAggregateToolCall(tc.id, { result, isError: true });
-        recordIssue(issue, turnIssues);
-        yield issueEvent(issue, turnCtx);
-        yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
+        yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues);
         return;
       }
 
@@ -836,12 +834,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             `Output validation error for tool "${tc.name}": ${outputResult.error.message}`,
             tc,
           );
-          const result = issueToToolResult(issue);
-          await appendToolResult(tc.id, tc.name, result, true);
-          updateAggregateToolCall(tc.id, { result, isError: true });
-          recordIssue(issue, turnIssues);
-          yield issueEvent(issue, turnCtx);
-          yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
+          yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues);
           return;
         }
         // Downstream sees what the schema produced: stripped fields, defaults and transforms applied.
@@ -885,22 +878,12 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       );
       if (!pulled.ok) {
         const issue = timeoutIssue();
-        const result = issueToToolResult(issue);
-        await appendToolResult(tc.id, tc.name, result, true);
-        updateAggregateToolCall(tc.id, { result, isError: true });
-        recordIssue(issue, turnIssues);
-        yield issueEvent(issue, turnCtx);
-        yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
+        yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues);
         return;
       }
       if (!pulled.value.approved) {
         const issue = toolExecutionIssue("approval_denied", "User denied this action", tc);
-        const result = issueToToolResult(issue);
-        await appendToolResult(tc.id, tc.name, result, true);
-        updateAggregateToolCall(tc.id, { result, isError: true });
-        recordIssue(issue, turnIssues);
-        yield issueEvent(issue, turnCtx);
-        yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
+        yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues);
         return;
       }
     }
@@ -1011,13 +994,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
         if (settled.kind === "timeout") {
           const issue = timeoutIssue();
-          const timeoutResult = issueToToolResult(issue);
-          await appendToolResult(tc.id, tc.name, timeoutResult, true);
-          updateAggregateToolCall(tc.id, { result: timeoutResult, isError: true });
-          recordIssue(issue, turnIssues);
-          yield issueEvent(issue, turnCtx);
-          finishToolExecution();
-          yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: timeoutResult, isError: true };
+          yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
           return;
         }
 
@@ -1049,13 +1026,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           );
           if (!response) {
             const issue = timeoutIssue();
-            const timeoutResult = issueToToolResult(issue);
-            await appendToolResult(tc.id, tc.name, timeoutResult, true);
-            updateAggregateToolCall(tc.id, { result: timeoutResult, isError: true });
-            recordIssue(issue, turnIssues);
-            yield issueEvent(issue, turnCtx);
-            finishToolExecution();
-            yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: timeoutResult, isError: true };
+            yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
             return;
           }
           req.resolve(response.approved);
@@ -1105,13 +1076,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           );
           if (!response) {
             const issue = timeoutIssue();
-            const timeoutResult = issueToToolResult(issue);
-            await appendToolResult(tc.id, tc.name, timeoutResult, true);
-            updateAggregateToolCall(tc.id, { result: timeoutResult, isError: true });
-            recordIssue(issue, turnIssues);
-            yield issueEvent(issue, turnCtx);
-            finishToolExecution();
-            yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: timeoutResult, isError: true };
+            yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
             return;
           }
           let output = response.result;
@@ -1140,13 +1105,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             `Output validation error for tool "${tc.name}": ${outputResult.error.message}`,
             tc,
           );
-          const output = issueToToolResult(issue);
-          await appendToolResult(tc.id, tc.name, output, true);
-          updateAggregateToolCall(tc.id, { result: output, isError: true });
-          recordIssue(issue, turnIssues);
-          yield issueEvent(issue, turnCtx);
-          finishToolExecution();
-          yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: output, isError: true };
+          yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
           return;
         }
         // Downstream sees what the schema produced: stripped fields, defaults and transforms applied.
@@ -1166,13 +1125,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       const issue = error instanceof ToolExecutionFailure
         ? error.issue
         : toolExecutionIssue("execution_failed", toErrorMessage(error), tc);
-      const result = issueToToolResult(issue);
-      await appendToolResult(tc.id, tc.name, result, true);
-      updateAggregateToolCall(tc.id, { result, isError: true });
-      recordIssue(issue, turnIssues);
-      yield issueEvent(issue, turnCtx);
-      finishToolExecution();
-      yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
+      yield* failToolCall(tc, turnCtx, updateAggregateToolCall, issue, turnIssues, finishToolExecution);
     } finally {
       finishToolExecution();
       if (timeoutHandle) clearTimeout(timeoutHandle);

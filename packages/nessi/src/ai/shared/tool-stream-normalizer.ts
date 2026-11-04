@@ -15,7 +15,6 @@ type PendingToolCall = {
   callId: string;
   name: string;
   argsText: string;
-  argsDeltas: string[];
 };
 
 type NormalizerOptions = {
@@ -235,7 +234,7 @@ export async function* normalizeProviderStream(
         case "tool_start":
           suppressMalformedTextSpan = false;
           yield* closeOpenBlock();
-          pending.set(event.callId, { callId: event.callId, name: event.name, argsText: "", argsDeltas: [] });
+          pending.set(event.callId, { callId: event.callId, name: event.name, argsText: "" });
           break;
 
         case "tool_delta": {
@@ -253,7 +252,6 @@ export async function* normalizeProviderStream(
             break;
           }
           tool.argsText += event.argsDelta;
-          tool.argsDeltas.push(event.argsDelta);
           break;
         }
 
@@ -271,7 +269,7 @@ export async function* normalizeProviderStream(
             pending.delete(event.callId);
             yield* emitIssue(toolIssue(
               "malformed_tool_call",
-              tool ?? { callId: event.callId, name: event.name, argsText: "", argsDeltas: [] },
+              tool ?? { callId: event.callId, name: event.name, argsText: "" },
               "missing_tool_name",
             ));
             break;
@@ -283,7 +281,7 @@ export async function* normalizeProviderStream(
             pending.delete(event.callId);
             yield* emitIssue(toolIssue(
               "malformed_tool_call",
-              tool ?? { callId: event.callId, name: event.name, argsText: "", argsDeltas: [] },
+              tool ?? { callId: event.callId, name: event.name, argsText: "" },
               "invalid_tool_arguments",
             ));
             break;
