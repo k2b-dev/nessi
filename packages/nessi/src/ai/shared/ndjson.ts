@@ -1,3 +1,4 @@
+import { parseJsonRecord } from "./json.js";
 import type { ByteStreamReader } from "./sse.js";
 
 export const parseNDJSON = async function* <T>(
@@ -43,21 +44,24 @@ export const parseNDJSON = async function* <T>(
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        yield JSON.parse(trimmed) as T;
-      } catch {
-        // silently skip malformed records
-      }
+      if (trimmed) yield parseRecord<T>(trimmed);
     }
   }
 
   const trimmed = buffer.trim();
-  if (trimmed) {
-    try {
-      yield JSON.parse(trimmed) as T;
-    } catch {
-      // silently skip trailing malformed records
-    }
+  if (trimmed) yield parseRecord<T>(trimmed);
+};
+
+/** A line that is not a JSON object; content it carried would otherwise vanish. */
+export class MalformedRecordError extends Error {
+  constructor() {
+    super("Received a malformed NDJSON record.");
+    this.name = "MalformedRecordError";
   }
+}
+
+const parseRecord = <T>(line: string): T => {
+  const record = parseJsonRecord<T>(line);
+  if (!record) throw new MalformedRecordError();
+  return record;
 };

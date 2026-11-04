@@ -1,10 +1,10 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { buildRequest, invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
-import { parseNDJSON } from "../shared/ndjson.js";
+import { MalformedRecordError, parseNDJSON } from "../shared/ndjson.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toOllamaTools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
@@ -181,8 +181,10 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
         throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<OllamaResponse>(await response.text());
+      const payload = parseJsonRecord<OllamaResponse>(await response.text());
       if (!payload) throw invalidResponseError("ollama");
+      const envelope = errorEnvelope("ollama", payload);
+      if (envelope) throw providerError(envelope);
       const usage = usageFromResponse(payload, options);
       const toolCalls = toolCallsFromResponse(payload);
       const finishReason = finishReasonFrom(payload, toolCalls.length > 0);
@@ -293,8 +295,9 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
 
       try {
         for await (const chunk of parseNDJSON<OllamaResponse>(reader, streamTimeouts)) {
-          if (chunk.error) {
-            yield { type: "error", error: `ollama stream error: ${chunk.error}`, retryable: true };
+          const envelope = errorEnvelope("ollama stream", chunk);
+          if (envelope) {
+            yield { type: "error", ...envelope };
             return;
           }
           if (chunk.message?.thinking) yield { type: "thinking", delta: chunk.message.thinking };
@@ -319,6 +322,9 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           }
         }
         if (!sawDone) yield streamEndedError("ollama");
+      } catch (error) {
+        if (!(error instanceof MalformedRecordError)) throw error;
+        yield malformedRecordError("ollama");
       } finally {
         cleanupExternalAbort();
         controller.abort();

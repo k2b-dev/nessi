@@ -15,3 +15,9 @@ export const ensureRecord = (value: unknown): Record<string, unknown> => {
   }
   return {};
 };
+
+/** A stream record or response body: a JSON object, or `null` for anything else. */
+export const parseJsonRecord = <T>(input: string): T | null => {
+  const value = safeJsonParse<unknown>(input);
+  return value && typeof value === "object" && !Array.isArray(value) ? value as T : null;
+};

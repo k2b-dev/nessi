@@ -1,12 +1,12 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { buildRequest, invalidResponseError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, providerError, ProviderError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -54,6 +54,7 @@ type AnthropicResponse = {
 };
 
 type AnthropicStreamEvent = {
+  type?: string;
   message?: {
     id?: string;
     model?: string;
@@ -276,8 +277,11 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         throw providerError(normalized);
       }
 
-      const payload = safeJsonParse<AnthropicResponse>(await response.text());
+      const payload = parseJsonRecord<AnthropicResponse>(await response.text());
       if (!payload) throw invalidResponseError("anthropic");
+      const envelope = errorEnvelope("anthropic", payload);
+      if (envelope) throw providerError(envelope);
+      if (!Array.isArray(payload.content)) throw new ProviderError("anthropic returned no content.", { kind: "provider_error", retryable: true });
       const content: AssistantContentBlock[] = [];
       const idPrefix = fallbackToolCallPrefix("anthropic");
       let toolIndex = 0;
@@ -353,10 +357,15 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
 
       for await (const event of result.events) {
         if (event.data === "[DONE]") break;
-        const payload = safeJsonParse<AnthropicStreamEvent>(event.data);
-        if (!payload) continue;
+        if (!event.data.trim()) continue;
+        const payload = parseJsonRecord<AnthropicStreamEvent>(event.data);
+        if (!payload) {
+          yield malformedRecordError("anthropic");
+          return;
+        }
 
-        if (event.event === "error") {
+        // Proxies may drop the SSE event name and keep only `{ type: "error" }`.
+        if (event.event === "error" || payload.type === "error") {
           const type = payload.error?.type ?? "unknown_error";
           yield {
             type: "error",

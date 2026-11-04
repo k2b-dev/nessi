@@ -191,6 +191,40 @@ export const serializeRequest = (label: string, body: unknown) => {
 export const invalidResponseError = (label: string) =>
   new ProviderError(`${label} returned invalid JSON.`, { kind: "provider_error", retryable: true });
 
+/** A stream record that is not a JSON object; content it carried would otherwise vanish. */
+export const malformedRecordError = (label: string) => ({
+  type: "error" as const,
+  error: `${label} sent a malformed stream record.`,
+  retryable: true,
+});
+
+/**
+ * An error envelope inside an HTTP 200 body or stream: `{ error: {...} }`, `{ error: "..." }`, or
+ * Mistral's `{ object: "error", message }`. Returns `undefined` for other records.
+ */
+export const errorEnvelope = (label: string, record: Record<string, unknown>) => {
+  const nested = record.error;
+  const fields = typeof nested === "object" && nested !== null
+    ? nested as Record<string, unknown>
+    : record.object === "error" || record.type === "error" ? record : undefined;
+  if (!fields && typeof nested !== "string") return undefined;
+  const message = typeof nested === "string"
+    ? nested
+    : typeof fields?.message === "string" ? fields.message : "unknown error";
+  const rawCode = fields?.code ?? fields?.type ?? fields?.status;
+  const status = typeof rawCode === "number" ? rawCode : undefined;
+  const code = typeof rawCode === "string" ? rawCode : undefined;
+  const contextOverflow = isContextOverflow(status ?? 400, message);
+  return {
+    error: `${label} error: ${message}${code ? ` (code: ${code})` : ""}`,
+    retryable: contextOverflow ? false : status !== undefined ? isRetryableStatus(status) : true,
+    ...(status !== undefined ? { status } : {}),
+    ...(code !== undefined ? { code } : {}),
+    contextOverflow,
+    overflowRatio: contextOverflow ? parseOverflowRatio(message) : undefined,
+  };
+};
+
 export const streamEndedError = (label: string) => ({
   type: "error" as const,
   error: `${label} stream ended unexpectedly before completion.`,
