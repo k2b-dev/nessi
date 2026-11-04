@@ -81,3 +81,17 @@ describe("cache usage", () => {
       .toEqual({ input: 15, output: 2, total: 17, cacheRead: 3 });
   });
 });
+
+describe("reasoning usage", () => {
+  it("reads reasoning tokens as a part of output and adds them across turns", async () => {
+    stubFetch(() => textResponse([
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] })}`,
+      `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 40, total_tokens: 50, completion_tokens_details: { reasoning_tokens: 32 } } })}`,
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n", "text/event-stream"));
+    const events = await collect(openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }).stream(request));
+    expect(events.at(-1)).toMatchObject({ type: "usage", usage: { input: 10, output: 40, total: 50, reasoning: 32 } });
+    expect(mergeUsage({ input: 1, output: 40, total: 41, reasoning: 32 }, { input: 1, output: 5, total: 6 }))
+      .toEqual({ input: 2, output: 45, total: 47, reasoning: 32 });
+  });
+});
