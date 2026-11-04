@@ -788,7 +788,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         return;
       }
 
-      const output = pulled.value.result;
+      let output = pulled.value.result;
       if (tool.def.outputSchema) {
         const outputResult = tool.def.outputSchema.safeParse(output);
         if (!outputResult.success) {
@@ -805,6 +805,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result, isError: true };
           return;
         }
+        // Downstream sees what the schema produced: stripped fields, defaults and transforms applied.
+        output = outputResult.data;
       }
 
       const historicalIssue = await appendSuccessfulToolResult(tool, tc, validatedInput, output);
@@ -1101,6 +1103,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           yield { type: "tool_execution_end", ...eventFields, callId: tc.id, name: tc.name, result: output, isError: true };
           return;
         }
+        // Downstream sees what the schema produced: stripped fields, defaults and transforms applied.
+        result = outputResult.data;
       }
 
       const historicalIssue = await appendSuccessfulToolResult(tool, tc, validatedInput, result);
