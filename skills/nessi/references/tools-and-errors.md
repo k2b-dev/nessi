@@ -239,9 +239,11 @@ the full result. The originating `loopId` always sends the full result to the
 provider, including a resumed loop. A later loop ID sends the historical value
 without changing the stored message, emitted events, or loop aggregate.
 
-Return `undefined` to omit the historical value for a particular result. If the
-callback throws, Nessi emits `tool_historical_result_error`, persists the full
-successful output, and continues. Tools without the callback and legacy stored
+Return `undefined` to omit the historical value for a particular result. The
+callback shares the rest of the tool's `timeoutMs`; Nessi stops waiting for it
+when the loop is aborted, but the callback itself is not cancelled. If it throws or runs out of time, Nessi emits
+`tool_historical_result_error`, persists the full successful output, and
+continues without running the tool again. Tools without the callback and legacy stored
 messages are unchanged. If configured, `maxToolResultChars` truncates the
 selected full or historical value afterward.
 
