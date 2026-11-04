@@ -43,10 +43,33 @@ export const defineTool = <TInput extends z.ZodType, TOutput extends z.ZodType =
 // Tool → JSON Schema (for provider adapters)
 // ----------------------------------------------------------------------------
 
+const deepFreeze = <T>(value: T): T => {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+};
+
+// Zod schemas are immutable, so a schema's JSON form can be reused; a tool resolver that returns
+// the same tools every turn then converts each schema once.
+const toJsonSchema = (schema: z.ZodType) => z.toJSONSchema(schema, { target: "draft-07" });
+const jsonSchemas = new WeakMap<z.ZodType, ReturnType<typeof toJsonSchema>>();
+
+/** The schema's JSON form, shared between calls and therefore frozen. */
+const inputJsonSchema = (schema: z.ZodType) => {
+  let json = jsonSchemas.get(schema);
+  if (!json) {
+    json = deepFreeze(toJsonSchema(schema));
+    jsonSchemas.set(schema, json);
+  }
+  return json;
+};
+
 export const toolToJsonSchema = (tool: ServerTool | ClientTool) => ({
   name: tool.def.name,
   description: tool.def.description,
-  parameters: z.toJSONSchema(tool.def.inputSchema, { target: "draft-07" }),
+  parameters: inputJsonSchema(tool.def.inputSchema),
 })
 
 export const toolToSpec = (tool: ServerTool | ClientTool) => {

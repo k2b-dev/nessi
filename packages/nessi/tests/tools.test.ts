@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { z } from "zod";
-import { defineTool, toolToJsonSchema } from "../src/tools.js";
+import { defineTool, toolToJsonSchema, toolToSpec } from "../src/tools.js";
 
 describe("defineTool", () => {
   const echoTool = defineTool({
@@ -102,5 +102,19 @@ describe("client tool approval", () => {
 
     expect(() => nessi({ provider: mockProvider([]), store: memoryStore(), systemPrompt: "sys", input: "go", tools: [tool] }))
       .toThrow("needsApproval is only supported for server tools");
+  });
+});
+
+describe("tool JSON schemas", () => {
+  it("convert each Zod schema once and share the frozen result", () => {
+    const inputSchema = z.object({ query: z.string(), filters: z.object({ tags: z.array(z.string()) }) });
+    // A resolver builds new tool objects every turn around the same schema.
+    const build = () => defineTool({ name: "search", description: "Search", inputSchema }).server(async () => "ok");
+    const first = toolToSpec(build()).inputSchema;
+    expect(toolToSpec(build()).inputSchema).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.properties?.filters)).toBe(true);
+    const other = defineTool({ name: "search", description: "Search", inputSchema: z.object({ query: z.string() }) }).server(async () => "ok");
+    expect(toolToSpec(other).inputSchema).not.toBe(first);
   });
 });
