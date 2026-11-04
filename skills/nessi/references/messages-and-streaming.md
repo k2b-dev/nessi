@@ -284,7 +284,10 @@ running tool. The loop then ends with `loop_end` reason `aborted`. Unfinished
 tool calls stay unanswered in the store. A later loop without `input` resumes
 calls of a completed answer, for example one waiting for approval, but never
 calls from an answer that was aborted while being generated
-(`stopReason: "interrupted"`). Those, and any call before new `input`, reach the
+(`stopReason: "interrupted"`) or cut off (`"max_tokens"`). Of the resumed calls,
+only the first can have been running; a server tool without approval runs it
+again only with `replay: "safe"` in `defineTool()`, otherwise it gets
+`reason: "not_returned"`. Those, and any call before new `input`, reach the
 provider as error results with `reason` `"not_run"` (the answer ended before its
 calls could run) or `"not_returned"` (the call may have run). A `compact` function receives the loop signal as `ctx.signal`.
 

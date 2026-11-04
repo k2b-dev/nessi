@@ -71,15 +71,11 @@ export type ToolResultMessage = {
 
 /**
  * Why nessi answered a call with an error. `malformed_tool_call`: the provider sent a call nessi
- * could not use. `not_run`: the response ended before its calls could run. `not_returned`: the
- * call may have run, but no result was stored. The rest name the failure of a call that ran.
+ * could not use. `not_run`: the response ended or was cut off before its calls could run.
+ * `not_returned`: the call may have run, but no result was stored. The rest name the failure of a
+ * call that ran.
  */
-export type ToolResultReason =
-  | ToolExecutionIssue["reason"]
-  | "timeout"
-  | "malformed_tool_call"
-  | "not_run"
-  | "not_returned";
+export type ToolResultReason = ToolExecutionIssue["reason"] | "timeout" | "malformed_tool_call";
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
@@ -155,7 +151,9 @@ export type ToolExecutionIssue = {
     | "input_validation_failed"
     | "output_validation_failed"
     | "execution_failed"
-    | "approval_denied";
+    | "approval_denied"
+    | "not_run"
+    | "not_returned";
   message: string;
   retryable: boolean;
   callId: string;

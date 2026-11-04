@@ -157,8 +157,12 @@ Every error result nessi writes carries a fixed `reason`: `malformed_tool_call`,
 `execution_failed`, `approval_denied`, `timeout`, `not_run` or `not_returned`.
 Match on `reason`, never on the result text.
 
-Recovery permits two retries after consecutive malformed turns, within
-`maxTurns`. A turn without malformed calls resets the recovery limit. If both
+A response cut off at the output limit (`stopReason: "max_tokens"`) runs none of
+its calls: each gets an error result with `reason: "not_run"`, and the model
+retries as for malformed calls.
+
+Recovery permits two retries after consecutive turns with malformed or cut-off
+calls, within `maxTurns`. Another turn resets the recovery limit. If both
 retries fail, the loop reports an issue and ends with `"error"`. Cancelled calls
 and provider-stopped responses do not trigger recovery. Provider-only `/ai`
 streams report issues without managing retries or executing tools.

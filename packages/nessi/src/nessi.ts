@@ -40,6 +40,7 @@ import {
   malformedCallName,
   malformedCallResult,
   newMalformedCallId,
+  NOT_RETURNED_TOOL_RESULT,
   projectHistoricalToolResults,
   rejectRemovedOptions,
   toErrorMessage,
@@ -248,16 +249,24 @@ const MALFORMED_RECOVERY_ATTEMPTS = 2;
 
 const malformedRecoveryExhausted = (): NessiIssue => ({
   kind: "runtime_error",
-  message: "Tool calls are still malformed after two recovery attempts. Stopping the loop.",
+  message: "Tool calls are still malformed or cut off after two recovery attempts. Stopping the loop.",
   retryable: false,
 });
+
+/** What the model reads for a call after a terminal tool of the same response. */
+const AFTER_TERMINAL_TOOL_RESULT = "Not run: an earlier call of this response ended the turn.";
+
+/** What the model reads for a call of a response cut off at the output token limit. */
+const CUT_OFF_TOOL_RESULT =
+  "Not run: the response reached the output token limit, so its calls did not run. Send them again in a shorter response, for example with smaller arguments or fewer calls at once.";
 
 const resultReason = (issue: NessiIssue): ToolResultReason | undefined =>
   issue.kind === "tool_execution_error" ? issue.reason : issue.kind === "timeout" ? "timeout" : undefined;
 
 /**
- * Trailing assistant messages that carried malformed calls, counted back to the first one without
- * any or to a user message; a resumed loop goes on with the recovery budget its history spent.
+ * Trailing assistant messages whose calls could not be used (malformed, or cut off at the output
+ * limit), counted back to the first other one or to a user message; a resumed loop goes on with
+ * the recovery budget its history spent.
  */
 const trailingMalformedTurns = (entries: StoreEntry[]): number => {
   let count = 0;
@@ -265,7 +274,9 @@ const trailingMalformedTurns = (entries: StoreEntry[]): number => {
     const message = entries[index]!.message;
     if (message.role === "user") break;
     if (message.role !== "assistant") continue;
-    if (!message.content.some((block) => block.type === "tool_call" && isMalformedCallId(block.id))) break;
+    const calls = message.content.filter((block) => block.type === "tool_call");
+    const unusable = calls.some((block) => isMalformedCallId(block.id)) || (message.stopReason === "max_tokens" && calls.length > 0);
+    if (!unusable) break;
     count++;
   }
   return count;
@@ -1202,7 +1213,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     if (entry.kind === "summary") return;
     const assistantMessage = entry.message as AssistantMessage;
     // Calls from a response the provider stopped, or that the user aborted while it was still
-    // being generated, are never executed. They reach the provider as interrupted calls instead.
+    // being generated, are never executed. They reach the provider as not run instead.
     const stopped = assistantMessage.stopReason;
     if (stopped === "error" || stopped === "interrupted" || stopped === "aborted") return;
     const toolCallBlocks = assistantMessage.content.filter((block): block is ToolCallBlock => block.type === "tool_call");
@@ -1222,6 +1233,17 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
     const pending = toolCallBlocks.filter((block) => !resolvedCallIds.has(block.id) && !isMalformedCallId(block.id));
     if (pending.length === 0) return;
+
+    // A cut-off response stored without the error results of its calls gets them now; they never run.
+    if (stopped === "max_tokens") {
+      const aggregateCalls = loopTurns.findLast((turn) => turn.message === assistantMessage)?.toolCalls ?? [];
+      for (const call of pending) {
+        await appendErrorResult(call.id, call.name, CUT_OFF_TOOL_RESULT, "not_run");
+        const aggregateCall = aggregateCalls.find((toolCall) => toolCall.callId === call.id);
+        if (aggregateCall) Object.assign(aggregateCall, { result: CUT_OFF_TOOL_RESULT, isError: true });
+      }
+      return;
+    }
 
     const toolSnapshot = await resolveToolSnapshot();
 
@@ -1245,6 +1267,19 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     };
     yield { type: "turn_start", agentId, loopId, ...turnCtx, resumed: true };
     try {
+      // Calls run one by one in order and store their results in that order, so of the calls
+      // without a result only the first can have been running when the run stopped. A server tool
+      // that needs no approval may have had its effect; it runs again only when marked safe.
+      const [first] = pending;
+      const firstTool = first ? toolSnapshot.toolMap.get(first.name) : undefined;
+      if (first && firstTool?.kind === "server" && !firstTool.def.needsApproval && firstTool.def.replay !== "safe") {
+        pending.shift();
+        const issue = toolExecutionIssue("not_returned", NOT_RETURNED_TOOL_RESULT, first);
+        await appendErrorResult(first.id, first.name, issue.message, "not_returned");
+        updateAggregateToolCall(first.id, { result: issue.message, isError: true });
+        recordIssue(issue, turnIssues);
+        yield issueEvent(issue, turnCtx);
+      }
       for (const tc of pending) {
         if (signal.aborted) break;
         yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
@@ -1634,7 +1669,11 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return;
         }
 
-        consecutiveMalformedTurns = malformedIssues.length > 0 ? consecutiveMalformedTurns + 1 : 0;
+        // A response cut off at the output limit may lack calls or text it meant to send, and its
+        // calls may depend on them, so none of them runs. The model retries as for malformed calls.
+        const cutOff = stopReason === "max_tokens" && toolCalls.length > 0;
+        const unusable = malformedIssues.length > 0 || cutOff;
+        consecutiveMalformedTurns = unusable ? consecutiveMalformedTurns + 1 : 0;
 
         if (toolCalls.length === 0 && malformedIssues.length === 0) {
           yield { type: "turn_end", agentId, loopId, ...turnCtx, message: assistantMessage };
@@ -1655,9 +1694,22 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           if (aggregateToolCall) Object.assign(aggregateToolCall, patch);
         };
 
+        /** Answers calls that will not run, without execution events. */
+        async function* skipToolCalls(calls: ToolCallBlock[], text: string): AsyncGenerator<OutboundEvent> {
+          for (const tc of calls) {
+            const issue = toolExecutionIssue("not_run", text, tc);
+            await appendErrorResult(tc.id, tc.name, text, "not_run");
+            updateAggregateToolCall(tc.id, { result: text, isError: true });
+            recordIssue(issue, turnIssues);
+            yield issueEvent(issue, turnCtx);
+          }
+        }
+
+        if (cutOff) yield* skipToolCalls(toolCalls, CUT_OFF_TOOL_RESULT);
+
         let terminalToolCompleted = false;
         try {
-          for (const tc of toolCalls) {
+          for (const [index, tc] of (cutOff ? [] : toolCalls).entries()) {
             yield* executeToolCall(tc, toolSnapshot, turnCtx, updateAggregateToolCall, turnIssues);
             const aggregateToolCall = aggregateToolCallMap.get(tc.id);
             const isTerminalTool = Boolean(
@@ -1665,6 +1717,8 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             );
             if (isTerminalTool && aggregateToolCall && !aggregateToolCall.isError) {
               terminalToolCompleted = true;
+              // The calls after a terminal tool never run; their results keep a resume from running them.
+              yield* skipToolCalls(toolCalls.slice(index + 1), AFTER_TERMINAL_TOOL_RESULT);
               break;
             }
           }
@@ -1682,7 +1736,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         }
 
         let malformedRetriesExhausted = false;
-        if (malformedIssues.length > 0 && !terminalToolCompleted) {
+        if (unusable && !terminalToolCompleted) {
           if (consecutiveMalformedTurns > MALFORMED_RECOVERY_ATTEMPTS) {
             const issue = malformedRecoveryExhausted();
             recordIssue(issue, turnIssues);

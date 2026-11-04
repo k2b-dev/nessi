@@ -93,14 +93,30 @@ tell them apart without comparing text: `malformed_tool_call`, `unknown_tool`,
 A call can stay without a result, for example after an abort or a crash. The
 store keeps it that way, and every provider request answers it with an error
 result: `not_run` when its response ended before calls could run (`stopReason`
-`"error"` or `"interrupted"`), otherwise `not_returned`, which tells the model
-the call may have run. A result stored after a later message, such as one a
-client pushed late, moves up to its call in the request.
+`"error"`, `"interrupted"` or `"max_tokens"`), otherwise `not_returned`, which
+tells the model the call may have run. A result stored after a later message,
+such as one a client pushed late, moves up to its call in the request.
 
-Recovery allows two retries after consecutive malformed turns, subject to
-`maxTurns`. A turn without malformed calls resets this limit. If both retries
-fail, the loop reports an issue and ends with `"error"`. Cancelled calls and
-responses stopped by the provider do not trigger recovery.
+A response cut off at the output token limit (`stopReason: "max_tokens"`) may
+lack calls or text it meant to send, so none of its calls runs. Each gets an
+error result with `reason: "not_run"` that asks for a shorter response, and the
+model gets another turn, as for malformed calls.
+
+A loop resumed without `input` runs the calls of the last response that have no
+result. Calls run one at a time in order, so only the first of them can have
+been running when the run stopped. If it belongs to a server tool without
+`needsApproval`, it may already have had its effect: nessi answers it with
+`reason: "not_returned"` instead of running it again, unless the tool is
+defined with `replay: "safe"` (running it twice does no harm, for example a
+read). The calls after it never started and run normally. A call that needs
+approval runs only after the approval the resumed loop receives; client tools
+get their request again.
+
+Recovery allows two retries after consecutive turns with malformed or cut-off
+calls, subject to `maxTurns`; a resumed loop counts the turns its history
+already spent. Another turn resets this limit. If both retries fail, the loop
+reports an issue and ends with `"error"`. Cancelled calls and responses stopped
+by the provider do not trigger recovery.
 
 ## Dynamic tools
 

@@ -179,6 +179,12 @@ export type ToolDefinition<TInput extends z.ZodType = z.ZodType, TOutput extends
   /** Ask the app for approval before a server tool runs. Not supported on client tools. */
   needsApproval?: boolean;
   timeoutMs?: number | false;
+  /**
+   * Whether a resumed loop may run a server tool again when the run stopped while it was running,
+   * so its result is missing. `"unsafe"` (the default) answers such a call as `not_returned`; mark
+   * a tool `"safe"` when running it twice does no harm, for example a read.
+   */
+  replay?: "safe" | "unsafe";
   /** Derive a smaller representation that later loops send to the provider instead of the full result. */
   toHistoricalResult?: (context: HistoricalToolResultContext<TInput, TOutput>) => unknown | Promise<unknown>;
 

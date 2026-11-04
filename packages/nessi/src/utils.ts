@@ -101,7 +101,7 @@ const MALFORMED_REPAIR_REQUEST =
 export const malformedCallResult = (issueMessage?: string): string =>
   issueMessage ? `${excerpt(issueMessage, 512)} ${MALFORMED_REPAIR_REQUEST}` : `This tool call could not be used. ${MALFORMED_REPAIR_REQUEST}`;
 
-const STOPPED_BEFORE_TOOLS = new Set<string | undefined>(["error", "interrupted", "aborted"]);
+const STOPPED_BEFORE_TOOLS = new Set<string | undefined>(["error", "interrupted", "aborted", "max_tokens"]);
 
 /** The error result nessi sends for a call without a stored result. */
 const openCallResult = (call: ToolCallBlock, stopReason: string | undefined): ToolResultMessage => {
