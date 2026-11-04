@@ -33,5 +33,16 @@ export const parseToolArguments = (value: unknown): Record<string, unknown> | un
   return typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 };
 
+/**
+ * Streamed tool arguments as text for the normalizer, which checks the completed text. Servers
+ * that send objects instead of JSON strings keep their value; absent or empty input stays empty.
+ */
+export const toolArgumentsText = (value: unknown): string => {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) return "";
+  return JSON.stringify(value);
+};
+
 export const malformedToolArgumentsError = (label: string, name: string) =>
   new Error(`${label} returned malformed JSON arguments for "${name}".`);

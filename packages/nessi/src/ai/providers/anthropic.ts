@@ -6,7 +6,7 @@ import {
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, malformedToolArgumentsError, parseToolArguments, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -44,7 +44,7 @@ type AnthropicResponse = {
     | { type: "thinking"; thinking?: string; signature?: string }
     | { type: "redacted_thinking"; data?: string }
     | { type: "text"; text?: string }
-    | { type: "tool_use"; id?: string; name: string; input?: Record<string, unknown> }
+    | { type: "tool_use"; id?: string; name: string; input?: unknown }
   >;
   stop_reason?: string | null;
   usage?: {
@@ -293,7 +293,9 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         } else if (block.type === "text") {
           appendAssistantContentBlock(content, { type: "text", text: block.text ?? "" });
         } else if (block.type === "tool_use") {
-          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args: block.input ?? {} });
+          const args = parseToolArguments(block.input);
+          if (!args) throw malformedToolArgumentsError("anthropic", block.name);
+          content.push({ type: "tool_call", id: block.id ?? `${idPrefix}-${toolIndex}`, name: block.name, args });
           toolIndex++;
         }
       }
@@ -378,7 +380,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "content_block_start" && payload.content_block?.type === "tool_use") {
           const index = typeof payload.index === "number" ? payload.index : syntheticIndex++;
           const startInput = payload.content_block.input;
-          const argsBuffer = startInput && Object.keys(startInput).length > 0 ? JSON.stringify(startInput) : "";
+          const argsBuffer = toolArgumentsText(startInput);
           toolBuffers.set(index, {
             callId: payload.content_block.id ?? `${idPrefix}-${index}`,
             name: payload.content_block.name ?? "",
