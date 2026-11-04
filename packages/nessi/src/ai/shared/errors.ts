@@ -161,8 +161,16 @@ export const normalizeHttpError = async (
 
 const withRetryAfter = (retryAfterMs: number | undefined) => (retryAfterMs !== undefined ? { retryAfterMs } : {});
 
+/**
+ * Runtimes reject a request header with a message that repeats its value, which can be an API key,
+ * so such a message never becomes part of an error.
+ */
+export const withoutHeaderValues = (message: string) => (/header/i.test(message) ? "a request header was rejected" : message);
+
+const connectionErrorMessage = (error: unknown) => withoutHeaderValues(error instanceof Error ? error.message : String(error));
+
 export const formatConnectionError = (label: string, error: unknown) =>
-  `${label} connection failed: ${error instanceof Error ? error.message : String(error)}`;
+  `${label} connection failed: ${connectionErrorMessage(error)}`;
 
 const errorCode = (error: unknown) =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : undefined;
@@ -230,6 +238,22 @@ export class ProviderError extends Error implements ProviderErrorDetails {
 /** A request nessi cannot build, such as an unsupported file type; retrying cannot help. */
 export const invalidRequestError = (message: string, options?: { cause?: unknown }) =>
   new ProviderError(message, { kind: "invalid_request", retryable: false }, options);
+
+/** A header value `fetch` accepts once it trims surrounding whitespace: Latin-1 without NUL, CR or LF. */
+const validHeaderValue = (value: unknown) =>
+  typeof value === "string" && /^[^\0\r\n\u0100-\uffff]*$/.test(value.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, ""));
+
+/**
+ * Rejects a request before it leaves when a header value is invalid, for example an API key with a
+ * line break from a secret file. The error names the header and never contains its value.
+ */
+export const assertHeaderValues = (label: string, headers: Record<string, string>) => {
+  for (const [header, value] of Object.entries(headers)) {
+    if (!validHeaderValue(value)) {
+      throw invalidRequestError(`${label} request has an invalid value for the "${header}" header; check the API key and custom headers.`);
+    }
+  }
+};
 
 /** Runs a local request-building step; its failures are `invalid_request` and nothing is sent. */
 export const buildRequest = <T>(label: string, build: () => T): T => {

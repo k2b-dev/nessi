@@ -10,7 +10,7 @@ import type {
   ScoreQuestion,
   SystemOneResponse,
 } from "../decision.js";
-import { formatConnectionError, readErrorBody } from "../shared/errors.js";
+import { assertHeaderValues, formatConnectionError, readErrorBody } from "../shared/errors.js";
 
 export type SystemOneDecisionOptions = {
   /** Base URL including `/v1`; `/systemone` is appended. */
@@ -96,9 +96,11 @@ export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProv
   ): Promise<DecisionResult<TQuestions>> {
     signal?.throwIfAborted();
     const { name } = endpoint;
+    const headers = { ...endpoint.headers, "Content-Type": "application/json" };
+    assertHeaderValues(name, headers);
     const response = await fetch(endpoint.url, {
       method: "POST",
-      headers: { ...endpoint.headers, "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         model: endpoint.model,
         state,

@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "../shared/errors.js";
+import { assertHeaderValues, formatConnectionError, normalizeHttpError } from "../shared/errors.js";
 import type { TranscriptionProvider } from "../transcription.js";
 
 export type OpenAICompatibleTranscriptionOptions = {
@@ -14,6 +14,9 @@ export const openAICompatibleTranscription = (
 ): TranscriptionProvider => {
   const baseURL = options.baseURL.replace(/\/+$/, "");
   const name = options.name ?? "openai-compatible";
+  // `Headers` rejects an invalid value with a message that repeats it, so check before building them.
+  assertHeaderValues(name, { ...options.headers });
+  if (options.apiKey) assertHeaderValues(name, { Authorization: `Bearer ${options.apiKey}` });
   const headers = new Headers(options.headers);
   // Fetch must supply the multipart boundary, including with custom headers.
   headers.delete("Content-Type");

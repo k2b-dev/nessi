@@ -3,6 +3,7 @@ import type {
   RealtimeWebSocket,
   RealtimeWebSocketFactory,
 } from "../transcription.js";
+import { assertHeaderValues, formatConnectionError, withoutHeaderValues } from "../shared/errors.js";
 
 export type VllmRealtimeTranscriptionOptions = {
   /** HTTP(S) or WS(S) base URL including `/v1`; `/realtime` is appended. */
@@ -96,10 +97,11 @@ export const vllmRealtimeTranscription = (
 
       const audioIterator = audio[Symbol.asyncIterator]();
       let socket: RealtimeWebSocket;
+      assertHeaderValues(`${name} realtime`, headers);
       try {
         socket = openWebSocket(url, headers);
       } catch (error) {
-        throw new Error(`${name} realtime connection failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(formatConnectionError(`${name} realtime`, error));
       }
 
       let socketError = "";
@@ -115,7 +117,7 @@ export const vllmRealtimeTranscription = (
       socket.addEventListener("error", (event) => {
         // Some runtimes (e.g. Bun) explain handshake failures such as a rejected API key here.
         if (typeof event === "object" && event !== null && "message" in event && typeof event.message === "string") {
-          socketError = event.message;
+          socketError = withoutHeaderValues(event.message);
         }
       });
       socket.addEventListener("close", ({ code, reason }) => push({ kind: "closed", code, reason }));
@@ -164,7 +166,7 @@ export const vllmRealtimeTranscription = (
           if (inbound.kind === "aborted") signal?.throwIfAborted();
           if (inbound.kind === "failed") throw inbound.error;
           if (inbound.kind === "closed") {
-            const detail = socketError || inbound.reason || `code ${inbound.code}`;
+            const detail = socketError || (inbound.reason ? withoutHeaderValues(inbound.reason) : "") || `code ${inbound.code}`;
             throw new Error(sessionStarted
               ? `${name} realtime connection closed before the transcript was done: ${detail}`
               : `${name} realtime connection failed: ${detail}`);

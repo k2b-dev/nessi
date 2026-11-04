@@ -1,4 +1,4 @@
-import { errorEnvelope, normalizeConnectionError, normalizeHttpError, parseRetryAfterMs, readErrorBody, runtimeErrorCode, serializeRequest } from "./errors.js";
+import { assertHeaderValues, errorEnvelope, normalizeConnectionError, normalizeHttpError, parseRetryAfterMs, readErrorBody, runtimeErrorCode, serializeRequest } from "./errors.js";
 import { parseJsonRecord } from "./json.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
@@ -38,6 +38,7 @@ export const openSSEStream = async (
   // An already aborted caller sends nothing; the stream reports the abort with the caller's reason.
   signal?.throwIfAborted();
   const serializedBody = serializeRequest(label, body);
+  assertHeaderValues(label, headers);
   const startedAt = Date.now();
   let reported = false;
   const report = (fields: Omit<TransportReport, "startedAt">) => {

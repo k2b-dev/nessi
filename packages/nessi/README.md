@@ -609,6 +609,12 @@ every question has a valid answer and otherwise rejects; it does not enforce
 provider limits such as the number of questions or options, which differ
 between models. HTTP, connection and malformed-response errors reject the
 promise, `signal` cancels with its reason, and there are no automatic retries.
+Decision calls have no timeout of their own; pass one, for example
+`signal: AbortSignal.timeout(5_000)`.
+
+Every provider checks its request headers before sending. An API key or header
+value with a line break or another character HTTP does not allow rejects with an
+error that names the header but never contains its value.
 
 For Clef on Cloudflare Workers AI, use the preset:
 
