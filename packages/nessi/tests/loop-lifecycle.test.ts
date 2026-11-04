@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, jest } from "bun:test";
 import { z } from "zod";
 import { nessi } from "../src/nessi.js";
 import { defineTool } from "../src/tools.js";
@@ -7,6 +7,11 @@ import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
 import { openAICompatible } from "../src/ai/index.js";
 import { fixtureText, stubFetch, textResponse } from "./ai/helpers/fixtures.js";
 import type { OutboundEvent, Provider } from "../src/types.js";
+
+/** Lets pending promise chains run between fake timer steps. */
+const settle = async () => {
+  for (let step = 0; step < 50; step++) await Promise.resolve();
+};
 
 const collect = async (loop: ReturnType<typeof nessi>) => {
   const events: OutboundEvent[] = [];
@@ -56,19 +61,38 @@ describe("nessi loop lifecycle", () => {
       return ctx.requestApproval("continue?");
     });
 
-    const startedAt = Date.now();
-    const events = await collect(nessi({
-      provider: mockProvider(toolCallTurn("slow")),
-      store: memoryStore(),
-      systemPrompt: "sys",
-      input: "go",
-      tools: [slow],
-      maxTurns: 1,
-    }));
+    // Controlled time: the loop must end once 60 ms have passed, without the 100 ms a fresh
+    // deadline for the nested approval wait would need.
+    let events: OutboundEvent[] = [];
+    jest.useFakeTimers();
+    try {
+      let finished = false;
+      const done = collect(nessi({
+        provider: mockProvider(toolCallTurn("slow")),
+        store: memoryStore(),
+        systemPrompt: "sys",
+        input: "go",
+        tools: [slow],
+        maxTurns: 1,
+      })).then((collected) => {
+        finished = true;
+        return collected;
+      });
+      // Step through the tool's 60 ms; nothing may need the time after it.
+      for (let ms = 0; ms <= 60 && !finished; ms++) {
+        await settle();
+        jest.advanceTimersByTime(1);
+      }
+      await settle();
+      expect(finished).toBe(true);
+      events = await done;
+    } finally {
+      jest.useRealTimers();
+    }
 
+    expect(events.some((event) => event.type === "tool_action_request" && event.kind === "custom_approval")).toBe(true);
     const end = events.find((event) => event.type === "tool_execution_end");
     expect(end).toMatchObject({ isError: true, result: 'Tool "slow" timed out after 60ms.' });
-    expect(Date.now() - startedAt).toBeLessThan(100);
   });
 
   it("does not count the previous exchange when starting from a trailing user message", async () => {
