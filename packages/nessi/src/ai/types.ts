@@ -356,6 +356,13 @@ export type OpenAICompat = {
   /** How `reasoningEffort` is sent: OpenAI's `reasoning_effort` (default) or OpenRouter's `reasoning: { effort }`. */
   reasoningFormat?: "reasoning_effort" | "openrouter";
   structuredOutput?: "response_format" | "vllm_structured_outputs" | false;
+  /**
+   * `"google"`: read the thought signature Gemini puts on each tool call
+   * (`extra_content.google.thought_signature`) and send it back with the call, as Gemini 3
+   * requires. A call without one, such as a call from another provider, gets Gemini's
+   * placeholder that skips the check.
+   */
+  toolCallSignatures?: "google";
 };
 
 export type OpenAICompatibleConfig = ProviderRequestDefaults & {

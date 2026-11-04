@@ -371,3 +371,83 @@ describe("typed reasoning chunks", () => {
     expect((await complete(provider, { messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
   });
 });
+
+describe("Gemini thought signatures on tool calls", () => {
+  const sse = (frames: unknown[]) => frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n";
+  const signedCall = sse([
+    {
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: "call-1",
+            type: "function",
+            function: { name: "lookup", arguments: "{\"q\":" },
+            extra_content: { google: { thought_signature: "sig-A" } },
+          }],
+        },
+        finish_reason: null,
+      }],
+    },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: "\"x\"}" } }] }, finish_reason: "tool_calls" }] },
+  ]);
+  const gemini = (compat?: OpenAICompat) => openAICompatible({
+    name: "gemini",
+    model: "gemini-3-pro",
+    baseURL: "https://example.test/v1beta/openai",
+    compat: { maxTokensField: "max_tokens", ...compat },
+  });
+
+  it("keeps the signature Gemini sends with a call and sends it back with that call", async () => {
+    const bodies: any[] = [];
+    stubFetch(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return textResponse(signedCall, "text/event-stream");
+    });
+    const provider = gemini({ toolCallSignatures: "google" });
+    const first = await complete(provider, { messages: [{ role: "user", content: [{ type: "text", text: "go" }] }] });
+    expect(first.message.content).toEqual([{ type: "tool_call", id: "call-1", name: "lookup", args: { q: "x" }, signature: "sig-A" }]);
+
+    await complete(provider, {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "go" }] },
+        first.message,
+        { role: "tool_result", callId: "call-1", name: "lookup", result: "found" },
+        // A call another provider made carries no Gemini signature.
+        { role: "assistant", provider: "openai", content: [{ type: "tool_call", id: "call-2", name: "lookup", args: {}, signature: "theirs" }] },
+        { role: "tool_result", callId: "call-2", name: "lookup", result: "found" },
+      ],
+    });
+    const calls = bodies[1].messages.filter((message: any) => message.role === "assistant").map((message: any) => message.tool_calls[0]);
+    expect(calls.map((call: any) => call.extra_content)).toEqual([
+      { google: { thought_signature: "sig-A" } },
+      { google: { thought_signature: "skip_thought_signature_validator" } },
+    ]);
+  });
+
+  it("keeps a signature that arrives on a later delta, for each of several calls", async () => {
+    stubFetch(async () => textResponse(sse([
+      { choices: [{ index: 0, delta: { tool_calls: [
+        { index: 0, id: "a", type: "function", function: { name: "lookup", arguments: "{}" } },
+        { index: 1, id: "b", type: "function", function: { name: "lookup", arguments: "{}" }, extra_content: { google: { thought_signature: "sig-B" } } },
+      ] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, extra_content: { google: { thought_signature: "sig-A" } } }] }, finish_reason: "tool_calls" }] },
+    ]), "text/event-stream"));
+    const result = await complete(gemini({ toolCallSignatures: "google" }), { messages: [] });
+    expect(result.message.content.map((block) => (block.type === "tool_call" ? [block.id, block.signature] : []))).toEqual([["a", "sig-A"], ["b", "sig-B"]]);
+  });
+
+  it("neither reads nor sends signatures without the setting", async () => {
+    const bodies: any[] = [];
+    stubFetch(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return textResponse(signedCall, "text/event-stream");
+    });
+    const provider = gemini();
+    const first = await complete(provider, { messages: [{ role: "user", content: [{ type: "text", text: "go" }] }] });
+    expect(first.message.content).toEqual([{ type: "tool_call", id: "call-1", name: "lookup", args: { q: "x" } }]);
+    await complete(provider, { messages: [first.message, { role: "tool_result", callId: "call-1", name: "lookup", result: "found" }] });
+    expect(bodies[1].messages[0].tool_calls[0]).not.toHaveProperty("extra_content");
+  });
+});
