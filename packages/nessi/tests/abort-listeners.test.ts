@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { compact } from "../src/compact.js";
 import { nessi } from "../src/nessi.js";
+import { z } from "zod";
 import { memoryStore } from "../src/stores.js";
+import { defineTool } from "../src/tools.js";
 import type { ProviderRequest } from "../src/types.js";
 import { mockProvider } from "./mock-provider.js";
 
@@ -49,6 +51,26 @@ describe("caller abort signals", () => {
     expect(caller.active()).toBe(0);
   });
 
+  it("keep no listener from loops that never start or stop before their first event", async () => {
+    const caller = countedSignal();
+    nessi({ provider: answer(), store: memoryStore(), systemPrompt: "test", input: "Hi", signal: caller.signal });
+    for (const coalesce of [undefined, { ms: 10 }]) {
+      const iterator = nessi({ provider: answer(), store: memoryStore(), systemPrompt: "test", input: "Hi", signal: caller.signal, coalesce })[Symbol.asyncIterator]();
+      await iterator.return?.();
+    }
+    const compaction = compact({ store: memoryStore(), provider: answer(), compact: () => null, signal: caller.signal })[Symbol.asyncIterator]();
+    await compaction.return?.();
+    expect(caller.active()).toBe(0);
+  });
+
+  it("keep no listener when a subscriber throws", async () => {
+    const caller = countedSignal();
+    const loop = nessi({ provider: answer(), store: memoryStore(), systemPrompt: "test", input: "Hi", signal: caller.signal });
+    loop.subscribe(() => { throw new Error("subscriber failed"); });
+    await expect((async () => { for await (const _event of loop) { /* drain */ } })()).rejects.toThrow("subscriber failed");
+    expect(caller.active()).toBe(0);
+  });
+
   it("keep no listener from finished compactions", async () => {
     const caller = countedSignal();
     for (let run = 0; run < 10; run++) {
@@ -73,5 +95,24 @@ describe("caller abort signals", () => {
       // drain
     }
     expect(request?.signal?.reason).toBe(reason);
+  });
+
+  it("pass the caller's abort reason to running tools", async () => {
+    const caller = countedSignal();
+    const reason = new Error("caller stopped");
+    let toolReason: unknown;
+    const wait = defineTool({ name: "wait", description: "Wait", inputSchema: z.object({}) }).server(async (_input, ctx) => {
+      caller.controller.abort(reason);
+      toolReason = ctx.signal?.reason;
+      return "done";
+    });
+    const provider = mockProvider([
+      { type: "tool_call", callId: "c1", name: "wait", args: {} },
+      { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "tool_use" },
+    ]);
+    for await (const _event of nessi({ provider, store: memoryStore(), systemPrompt: "test", input: "Hi", tools: [wait], signal: caller.signal })) {
+      // drain
+    }
+    expect(toolReason).toBe(reason);
   });
 });

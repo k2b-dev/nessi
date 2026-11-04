@@ -616,7 +616,16 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   };
 
-  const detachExternalSignal = followAbortSignal(externalSignal, abortController);
+  // Attached on the first next(), so a loop that never runs leaves no listener behind.
+  let detachExternal: (() => void) | undefined;
+  let detached = false;
+  const attachExternalSignal = () => {
+    if (!detached) detachExternal ??= followAbortSignal(externalSignal, abortController);
+  };
+  const detachExternalSignal = () => {
+    detached = true;
+    detachExternal?.();
+  };
 
   const signal = abortController.signal;
 
@@ -849,7 +858,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
 
     const toolAbort = new AbortController();
-    const abortTool = () => toolAbort.abort();
+    const abortTool = () => toolAbort.abort(signal.reason);
     if (signal.aborted) abortTool();
     else signal.addEventListener("abort", abortTool, { once: true });
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -1734,18 +1743,28 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     [Symbol.asyncIterator]() {
       return {
         async next() {
+          attachExternalSignal();
           const result = await generator.next();
           if (!result.done && result.value) {
-            for (const listener of subscribers) listener(result.value);
+            try {
+              for (const listener of subscribers) listener(result.value);
+            } catch (error) {
+              // A failing subscriber ends the loop; the suspended generator never reaches its cleanup.
+              abortController.abort();
+              detachExternalSignal();
+              throw error;
+            }
           }
           return result;
         },
         async return(value?: OutboundEvent) {
           // Stopping iteration early ends the loop: cancel running tools and provider requests.
           abortController.abort();
+          detachExternalSignal();
           return generator.return(value as OutboundEvent);
         },
         async throw(error?: unknown) {
+          detachExternalSignal();
           return generator.throw(error);
         },
       };
