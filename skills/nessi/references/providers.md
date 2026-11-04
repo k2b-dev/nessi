@@ -198,6 +198,7 @@ provider with the same `name`.
 | OpenRouter | `https://openrouter.ai/api/v1` | `thinkingFormat: "reasoning_details"`, `reasoningFormat: "openrouter"`, `maxTokensField: "max_tokens"`, `structuredOutput: "response_format"`; optional `HTTP-Referer` and `X-Title` via `headers` |
 | Mistral | `https://api.mistral.ai/v1` | as in the example: 9-character tool call IDs, tool results with `name`, reasoning as typed `thinking` chunks, no `stream_options` |
 | vLLM, Scaleway | e.g. `http://localhost:8000/v1` | `structuredOutput: "vllm_structured_outputs"` (guided decoding, not strict), `maxTokensField: "max_tokens"`, `thinkingFormat: "text"` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `toolCallSignatures: "google"` (keeps each tool call's thought signature and sends it back, as Gemini 3 requires), `maxTokensField: "max_tokens"`, `structuredOutput: "response_format"` |
 
 Other Chat Completions endpoints work the same way, for example Ollama's
 `/v1`. Responses may carry `content` as a string or as typed `text` and

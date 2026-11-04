@@ -38,11 +38,18 @@ type OAIResponseContent = string | null | Array<{ type: "text"; text: string } |
 const chunkThinking = (chunk: OAIThinkingChunk) =>
   typeof chunk.thinking === "string" ? chunk.thinking : chunk.thinking.map((part) => part.text ?? "").join("");
 
+/** Gemini's OpenAI API carries a call's thought signature next to the call. */
+type GoogleExtraContent = { google?: { thought_signature?: string } };
+
 type OAIToolCall = {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+  extra_content?: GoogleExtraContent;
 };
+
+/** Gemini's documented placeholder for a call it did not sign, such as one from another provider. */
+const UNSIGNED_GOOGLE_CALL = "skip_thought_signature_validator";
 
 /** OpenRouter-style reasoning item: reasoning.text, reasoning.summary or reasoning.encrypted. */
 type ReasoningDetail = Record<string, unknown> & { type?: string; text?: string; summary?: string; index?: number };
@@ -66,6 +73,7 @@ type SSEChunk = {
         index: number;
         id?: string;
         function?: { name?: string; arguments?: string };
+        extra_content?: GoogleExtraContent;
       }>;
     };
     message?: {
@@ -191,6 +199,15 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
             id: mappedId,
             type: "function",
             function: { name: block.name, arguments: stringifyJson(block.args) },
+            ...(config.compat?.toolCallSignatures === "google"
+              ? {
+                extra_content: {
+                  google: {
+                    thought_signature: (message.provider === config.name ? block.signature : undefined) ?? UNSIGNED_GOOGLE_CALL,
+                  },
+                },
+              }
+              : {}),
           });
         }
       }
@@ -315,7 +332,9 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         return;
       }
 
-      type ToolBuffer = { callId: string; name: string; argsBuffer: string; started: boolean };
+      type ToolBuffer = { callId: string; name: string; argsBuffer: string; started: boolean; signature?: string };
+      const signatureOf = (toolCall: { extra_content?: GoogleExtraContent }) =>
+        config.compat?.toolCallSignatures === "google" ? toolCall.extra_content?.google?.thought_signature || undefined : undefined;
       const toolBuffers = new Map<number, ToolBuffer>();
       const pendingToolCalls: ToolBuffer[] = [];
       let latestUsage: Usage | undefined;
@@ -369,6 +388,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
             callId: buffer.callId,
             name: buffer.name,
             args: ensureRecord(safeJsonParse(buffer.argsBuffer || "{}")),
+            ...(buffer.signature !== undefined ? { signature: buffer.signature } : {}),
           };
         }
         toolBuffers.clear();
@@ -439,17 +459,20 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
               const callId = toolCall.id ?? `${idPrefix}-${toolCall.index}`;
               const name = toolCall.function?.name ?? "";
               const argsDelta = toolArgumentsText(toolCall.function?.arguments);
-              const buffer = {
+              const signature = signatureOf(toolCall);
+              const buffer: ToolBuffer = {
                 callId,
                 name,
                 argsBuffer: argsDelta,
                 started: false,
+                ...(signature !== undefined ? { signature } : {}),
               };
               toolBuffers.set(toolCall.index, buffer);
               pendingToolCalls.push(buffer);
               yield* startToolCall(buffer);
             } else {
               if (toolCall.function?.name) existing.name = toolCall.function.name;
+              existing.signature = signatureOf(toolCall) ?? existing.signature;
               const argsDelta = toolArgumentsText(toolCall.function?.arguments);
               if (argsDelta) existing.argsBuffer += argsDelta;
               const wasStarted = existing.started;
