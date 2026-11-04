@@ -1,4 +1,6 @@
 export { completeFromStream } from "./complete-from-stream.js";
+export { ProviderError } from "./shared/errors.js";
+export type { ProviderErrorDetails } from "./shared/errors.js";
 export { openAICompatibleTranscription } from "./providers/openai-compatible-transcription.js";
 export type { OpenAICompatibleTranscriptionOptions } from "./providers/openai-compatible-transcription.js";
 export { systemOneDecision } from "./providers/systemone-decision.js";

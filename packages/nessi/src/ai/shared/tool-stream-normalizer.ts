@@ -334,6 +334,9 @@ export async function* normalizeProviderStream(
             kind: "provider_error",
             message: event.error,
             retryable: event.retryable,
+            ...(event.status !== undefined ? { status: event.status } : {}),
+            ...(event.code !== undefined ? { code: event.code } : {}),
+            ...(event.retryAfterMs !== undefined ? { retryAfterMs: event.retryAfterMs } : {}),
             contextOverflow: event.contextOverflow,
             overflowRatio: event.overflowRatio,
           });

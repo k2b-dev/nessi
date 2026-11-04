@@ -1,4 +1,4 @@
-import { isRetryableStatus, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, isRetryableStatus, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
 import { ensureRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
@@ -220,7 +220,7 @@ const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleCon
 
 const parseCompletionResponse = async (response: Response, config: OpenAICompatibleConfig): Promise<GenerateResult> => {
   const payload = safeJsonParse<SSEChunk>(await response.text());
-  if (!payload) throw new Error(`${config.name} returned invalid JSON.`);
+  if (!payload) throw invalidResponseError(config.name);
 
   const choice = payload.choices?.[0];
   const message = choice?.message;
@@ -328,7 +328,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
 
       if (!response.ok) {
         const normalized = await normalizeHttpError(config.name, response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       return parseCompletionResponse(response, config);

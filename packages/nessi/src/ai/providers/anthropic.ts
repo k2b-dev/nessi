@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -273,11 +273,11 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("anthropic", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<AnthropicResponse>(await response.text());
-      if (!payload) throw new Error("anthropic returned invalid JSON.");
+      if (!payload) throw invalidResponseError("anthropic");
       const content: AssistantContentBlock[] = [];
       const idPrefix = fallbackToolCallPrefix("anthropic");
       let toolIndex = 0;

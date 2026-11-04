@@ -275,18 +275,44 @@ if (
 }
 ```
 
-`complete()` throws on connection errors, non-OK HTTP responses, invalid
-provider JSON, and configured provider timeouts. Timeout errors carry
-`kind: "timeout"`, `scope: "provider_total"` or `"provider_idle"`, and
-`retryable: true`. Caller cancellation preserves the signal's reason. See
-[Provider timeouts](providers.md#provider-timeouts).
+`complete()` and `completeFromStream()` throw a `ProviderError` on connection
+errors, non-OK HTTP responses, invalid provider JSON, and configured provider
+timeouts. Caller cancellation throws the signal's reason instead. Nessi never
+retries; the error carries what a retry policy needs:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `"provider_error"`, or `"timeout"` when a provider deadline ended the request |
+| `retryable` | `true` for 408, 409, 425, 429, 5xx, connection failures, invalid JSON, and timeouts |
+| `status` | HTTP status of a rejected request |
+| `code` | Provider error code from the body, or the runtime code of a failed connection (`ECONNREFUSED`) |
+| `retryAfterMs` | Wait the provider asked for (`retry-after-ms`, then `retry-after`) |
+| `contextOverflow`, `overflowRatio` | The request exceeded the context window |
+| `scope` | `"provider_first_byte"`, `"provider_idle"`, or `"provider_total"` for timeouts |
+
+```ts
+import { ProviderError } from "@k2b/nessi/ai";
+
+try {
+  return await provider.complete({ messages, signal });
+} catch (error) {
+  if (error instanceof ProviderError && error.retryable) {
+    await sleep(error.retryAfterMs ?? backoffMs);
+    // Retry a bounded number of times.
+  }
+  throw error;
+}
+```
+
+Streaming `provider_error` issues carry the same `status`, `code`, and
+`retryAfterMs`. See [Provider timeouts](providers.md#provider-timeouts).
 
 ## Context overflow
 
 Context overflow can appear as:
 
 - `event.type === "issue"` with `issue.kind === "provider_error"` and `contextOverflow: true` in streaming
-- a thrown error from `complete()`
+- a thrown `ProviderError` with `contextOverflow: true` from `complete()` or `completeFromStream()`
 
 Recommended application behavior:
 

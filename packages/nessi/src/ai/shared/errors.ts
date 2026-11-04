@@ -63,6 +63,18 @@ export const parseOverflowRatio = (message: string): number | undefined => {
   return max > 0 ? actual / max : undefined;
 };
 
+/** `retry-after-ms` (OpenAI) wins over the standard `retry-after` seconds or HTTP date. */
+export const parseRetryAfterMs = (headers: Headers, now = Date.now()): number | undefined => {
+  const milliseconds = Number(headers.get("retry-after-ms")?.trim() || Number.NaN);
+  if (Number.isFinite(milliseconds) && milliseconds >= 0) return milliseconds;
+  const value = headers.get("retry-after")?.trim();
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1_000 : undefined;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
+};
+
 export const normalizeHttpError = async (
   label: string,
   response: Response,
@@ -75,13 +87,79 @@ export const normalizeHttpError = async (
   return {
     error: `${label} ${response.status}: ${fullMessage}`,
     retryable: retryableOverride ?? isRetryableStatus(response.status),
+    status: response.status,
+    ...(code !== undefined ? { code } : {}),
+    ...withRetryAfter(parseRetryAfterMs(response.headers)),
     contextOverflow,
     overflowRatio: contextOverflow ? parseOverflowRatio(fullMessage) : undefined,
   };
 };
 
+const withRetryAfter = (retryAfterMs: number | undefined) => (retryAfterMs !== undefined ? { retryAfterMs } : {});
+
 export const formatConnectionError = (label: string, error: unknown) =>
   `${label} connection failed: ${error instanceof Error ? error.message : String(error)}`;
+
+/** A request that failed before a response; `code` is the runtime's, such as `ECONNREFUSED`. */
+export const normalizeConnectionError = (label: string, error: unknown) => {
+  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+  return { error: formatConnectionError(label, error), retryable: true, ...(code !== undefined ? { code } : {}) };
+};
+
+export type ProviderErrorDetails = {
+  /** `timeout` when a provider deadline ended the request; `provider_error` otherwise. */
+  kind: "provider_error" | "timeout";
+  retryable: boolean;
+  /** HTTP status of a rejected request. */
+  status?: number;
+  /** Provider error code from the body, or the runtime's connection error code. */
+  code?: string;
+  /** How long the provider asked the caller to wait (`retry-after-ms` or `retry-after`). */
+  retryAfterMs?: number;
+  contextOverflow?: boolean;
+  overflowRatio?: number;
+  /** The deadline that ended the request, when `kind` is `timeout`. */
+  scope?: "provider_first_byte" | "provider_idle" | "provider_total";
+};
+
+/**
+ * A failed provider request from `complete()` or `completeFromStream()`. It carries what a caller
+ * needs to decide on a retry; nessi itself never retries. Caller aborts throw the signal's reason.
+ */
+export class ProviderError extends Error implements ProviderErrorDetails {
+  override readonly name = "ProviderError";
+  readonly kind: ProviderErrorDetails["kind"];
+  readonly retryable: boolean;
+  readonly status?: number;
+  readonly code?: string;
+  readonly retryAfterMs?: number;
+  readonly contextOverflow?: boolean;
+  readonly overflowRatio?: number;
+  readonly scope?: ProviderErrorDetails["scope"];
+
+  constructor(message: string, details: ProviderErrorDetails, options?: { cause?: unknown }) {
+    super(message, options);
+    this.kind = details.kind;
+    this.retryable = details.retryable;
+    if (details.status !== undefined) this.status = details.status;
+    if (details.code !== undefined) this.code = details.code;
+    if (details.retryAfterMs !== undefined) this.retryAfterMs = details.retryAfterMs;
+    if (details.contextOverflow !== undefined) this.contextOverflow = details.contextOverflow;
+    if (details.overflowRatio !== undefined) this.overflowRatio = details.overflowRatio;
+    if (details.scope !== undefined) this.scope = details.scope;
+  }
+}
+
+/** Throwable form of `normalizeHttpError()` or `normalizeConnectionError()`. */
+export const providerError = (
+  { error, ...details }: { error: string } & Omit<ProviderErrorDetails, "kind">,
+  options?: { cause?: unknown },
+) => new ProviderError(error, { kind: "provider_error", ...details }, options);
+
+export const invalidResponseError = (label: string) =>
+  new ProviderError(`${label} returned invalid JSON.`, { kind: "provider_error", retryable: true });
 
 export const streamEndedError = (label: string) => ({
   type: "error" as const,

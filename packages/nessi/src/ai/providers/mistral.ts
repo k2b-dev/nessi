@@ -1,4 +1,4 @@
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -274,11 +274,11 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("mistral", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<MistralChunk>(await response.text());
-      if (!payload) throw new Error("mistral returned invalid JSON.");
+      if (!payload) throw invalidResponseError("mistral");
       const choice = payload.choices?.[0];
       const idPrefix = fallbackToolCallPrefix("mistral");
       const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => ({

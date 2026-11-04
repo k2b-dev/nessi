@@ -1,4 +1,4 @@
-import { formatConnectionError, normalizeHttpError } from "./errors.js";
+import { normalizeConnectionError, normalizeHttpError } from "./errors.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
 import type { ProviderTimeouts, RawStreamEvent } from "../types.js";
@@ -99,7 +99,7 @@ export const openSSEStream = async (
     }
     return {
       ok: false,
-      error: { type: "error", error: formatConnectionError(label, error), retryable: true },
+      error: { type: "error", ...normalizeConnectionError(label, error) },
     };
   } finally {
     if (firstByteTimeout) clearTimeout(firstByteTimeout);

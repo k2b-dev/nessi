@@ -1,5 +1,5 @@
 import type { ProviderTimeouts } from "../types.js";
-import { formatConnectionError } from "./errors.js";
+import { normalizeConnectionError, ProviderError, providerError } from "./errors.js";
 import type { ByteStreamReader } from "./sse.js";
 
 /** Buffer a native response with a total deadline and idle limits after headers. */
@@ -24,8 +24,8 @@ export const fetchCompleteResponse = async (
   const scheduleTimeout = (scope: "provider_total" | "provider_idle", timeoutMs?: number) => {
     if (!timeoutMs || timeoutMs <= 0) return;
     return setTimeout(() => {
-      controller.abort(Object.assign(
-        new Error(`${label} response ${scope === "provider_total" ? "total" : "idle"} timeout after ${timeoutMs}ms.`),
+      controller.abort(new ProviderError(
+        `${label} response ${scope === "provider_total" ? "total" : "idle"} timeout after ${timeoutMs}ms.`,
         { kind: "timeout", scope, retryable: true },
       ));
     }, timeoutMs);
@@ -43,7 +43,7 @@ export const fetchCompleteResponse = async (
         return response;
       }).catch((error: unknown) => {
         if (controller.signal.aborted) throw controller.signal.reason;
-        throw new Error(formatConnectionError(label, error));
+        throw providerError(normalizeConnectionError(label, error), { cause: error });
       }),
       aborted,
     ]);

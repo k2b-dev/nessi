@@ -1,5 +1,5 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { formatConnectionError, normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeConnectionError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { parseNDJSON } from "../shared/ndjson.js";
@@ -178,11 +178,11 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("ollama", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<OllamaResponse>(await response.text());
-      if (!payload) throw new Error("ollama returned invalid JSON.");
+      if (!payload) throw invalidResponseError("ollama");
       const usage = usageFromResponse(payload, options);
       const toolCalls = toolCallsFromResponse(payload);
       const finishReason = finishReasonFrom(payload, toolCalls.length > 0);
@@ -260,11 +260,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
           };
           return;
         }
-        yield {
-          type: "error",
-          error: formatConnectionError("ollama", error),
-          retryable: true,
-        };
+        yield { type: "error", ...normalizeConnectionError("ollama", error) };
         return;
       } finally {
         if (firstByteTimeout) clearTimeout(firstByteTimeout);

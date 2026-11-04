@@ -308,9 +308,18 @@ calls. Set `totalMs` to the maximum duration you want for those calls. Without
 `totalMs`, the wait for native response headers has no provider timeout; pass
 a request `signal` if the caller owns the deadline.
 
-A native timeout rejects with an `Error` carrying `kind: "timeout"`,
+A native timeout rejects with a `ProviderError` carrying `kind: "timeout"`,
 `scope: "provider_total"` or `"provider_idle"`, and `retryable: true`. Caller
 cancellation preserves the signal's original reason.
+
+## Provider errors
+
+`complete()` and `completeFromStream()` throw a `ProviderError` (from
+`@k2b/nessi/ai`) when a provider request fails. It carries `kind`
+(`"provider_error"` or `"timeout"`), `retryable`, and, when known, `status`,
+`code`, `retryAfterMs`, `contextOverflow`, `overflowRatio`, and the timeout
+`scope`. Streaming `provider_error` issues carry the same `status`, `code`, and
+`retryAfterMs`. Nessi never retries; a caller abort throws the signal's reason.
 
 ## Reasoning effort
 

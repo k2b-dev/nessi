@@ -1,4 +1,4 @@
-import { normalizeHttpError, streamEndedError } from "../shared/errors.js";
+import { invalidResponseError, normalizeHttpError, providerError, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import {
   appendAssistantContentBlock,
@@ -221,11 +221,11 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
 
       if (!response.ok) {
         const normalized = await normalizeHttpError("gemini", response);
-        throw new Error(normalized.error);
+        throw providerError(normalized);
       }
 
       const payload = safeJsonParse<GeminiResponse>(await response.text());
-      if (!payload) throw new Error("gemini returned invalid JSON.");
+      if (!payload) throw invalidResponseError("gemini");
       const candidate = payload.candidates?.[0];
       const content: AssistantContentBlock[] = [];
       let toolCount = 0;
