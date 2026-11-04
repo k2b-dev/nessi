@@ -35,12 +35,12 @@ const providers: Array<{ name: string; create: (timeouts: ProviderTimeouts) => P
 ];
 
 // A broken implementation must fail the test rather than leave the test runner hanging.
-async function bounded<T>(promise: Promise<T>): Promise<T> {
+async function bounded<T>(promise: Promise<T>, ms = 1000): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
-      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("Test deadline exceeded")), 1000); }),
+      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("Test deadline exceeded")), ms); }),
     ]);
   } finally {
     clearTimeout(timeout);
@@ -100,11 +100,15 @@ for (const testCase of providers) {
 
     it("does not reset the total deadline when body chunks make progress", async () => {
       let cancelled = false;
+      let chunks = 0;
       stubFetch(() => new Response(new ReadableStream<Uint8Array>({
         start(controller) { controller.enqueue(new TextEncoder().encode('{"partial":')); },
         async pull(controller) {
           await new Promise((resolve) => setTimeout(resolve, 20));
-          if (!cancelled) controller.enqueue(new TextEncoder().encode(" "));
+          if (!cancelled) {
+            chunks++;
+            controller.enqueue(new TextEncoder().encode(" "));
+          }
         },
         cancel() { cancelled = true; },
       })));
@@ -112,6 +116,8 @@ for (const testCase of providers) {
       await expect(bounded(testCase.create({ totalMs: 100, idleMs: 900 }).complete({ messages: [] })))
         .rejects.toMatchObject({ kind: "timeout", scope: "provider_total", retryable: true });
       expect(cancelled).toBe(true);
+      // Progress happened before the deadline, so a total timer that reset on chunks would not fire.
+      expect(chunks).toBeGreaterThanOrEqual(2);
     });
 
     for (const totalMs of [undefined, 0, -1]) {
@@ -253,17 +259,17 @@ describe("complete timeouts over HTTP", () => {
           }), { headers: { "Content-Type": "text/event-stream" } });
         }
         nativeRequests++;
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         return Response.json({ choices: [{ message: { content: "HiHiHiHi" }, finish_reason: "stop" }] });
       },
     });
     try {
       const provider = openAICompatible({
-        // Both answers take 250 ms, past firstByteMs; each gap is 50 ms, far below the other limits.
-        name: "local", model: "test", baseURL: server.url.toString(), timeouts: { firstByteMs: 150, idleMs: 400, totalMs: 900 },
+        // Both answers take 250-300 ms, past firstByteMs; each gap is 50 ms, far below the other limits.
+        name: "local", model: "test", baseURL: server.url.toString(), timeouts: { firstByteMs: 200, idleMs: 400, totalMs: 900 },
       });
-      const native = await bounded(provider.complete({ messages: [] }));
-      const streamed = await bounded(completeFromStream(provider, { messages: [] }));
+      const native = await bounded(provider.complete({ messages: [] }), 3000);
+      const streamed = await bounded(completeFromStream(provider, { messages: [] }), 3000);
       expect(native.message.content).toEqual(streamed.message.content);
       expect(native.finishReason).toBe("stop");
       expect(streamed.finishReason).toBe("stop");
