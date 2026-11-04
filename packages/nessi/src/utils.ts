@@ -12,9 +12,37 @@ export const toErrorMessage = (err: unknown) =>
 export const createLoopId = () =>
   globalThis.crypto?.randomUUID?.() ?? `loop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-/** Rough token estimate: ~4 chars per token. Slightly overestimates due to JSON syntax — that's safer. */
-export const estimateTokens = (messages: Message[]): number =>
-  Math.ceil(JSON.stringify(messages).length / 4)
+/**
+ * Tokens one file part (an image) is assumed to cost. Providers price images by pixels, not by
+ * their base64 size; about 1,600 tokens is Anthropic's documented upper range for one image.
+ */
+export const FILE_PART_TOKEN_ESTIMATE = 1_600;
+
+/**
+ * Rough token estimate: ~4 characters per token for text and JSON, a fixed allowance per file
+ * part of a user message. Those base64 bodies are not counted as text; anything else, tool
+ * results included, is. `extra` (system prompt, tool specs) counts as text. Slightly
+ * overestimates text due to JSON syntax.
+ */
+export const estimateContextTokens = (messages: Message[], extra?: Record<string, unknown>): number => {
+  let files = 0;
+  const withoutFileBodies = messages.map((message) => {
+    if (message.role !== "user" || !message.content.some((part) => typeof part !== "string" && part.type === "file")) return message;
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (typeof part === "string" || part.type !== "file") return part;
+        files++;
+        return { ...part, data: "" };
+      }),
+    };
+  });
+  const text = JSON.stringify(extra === undefined ? withoutFileBodies : { ...extra, messages: withoutFileBodies });
+  return Math.ceil(text.length / 4) + files * FILE_PART_TOKEN_ESTIMATE;
+};
+
+/** Rough token estimate of messages; see `estimateContextTokens()`. */
+export const estimateTokens = (messages: Message[]): number => estimateContextTokens(messages);
 
 /** Truncate text keeping first half and last half with omission notice. */
 export const truncateMiddle = (text: string, maxChars: number): string => {
