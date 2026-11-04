@@ -47,19 +47,24 @@ type AnthropicResponse = {
     | { type: "tool_use"; id?: string; name: string; input?: Record<string, unknown> }
   >;
   stop_reason?: string | null;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-  };
+  usage?: AnthropicUsage;
+};
+
+/** Anthropic counts cached prompt tokens apart from `input_tokens`. */
+type AnthropicUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 };
 
 type AnthropicStreamEvent = {
   message?: {
     id?: string;
     model?: string;
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: AnthropicUsage;
   };
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: AnthropicUsage;
   content_block?: {
     type?: string;
     id?: string;
@@ -191,30 +196,24 @@ const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest,
 const resolveTemperature = (request: GenerateRequest, options?: AnthropicOptions) =>
   request.temperature ?? options?.temperature;
 
-const usageFromValue = (
-  usage: { input_tokens?: number; output_tokens?: number } | undefined,
-  options?: AnthropicOptions,
-) =>
-  applyCredits(
-    makeUsage(usage?.input_tokens ?? 0, usage?.output_tokens ?? 0),
-    options?.creditsPerInputToken,
-    options?.creditsPerOutputToken,
-  );
+/** `input` covers the whole prompt, cached parts included; `cacheRead` and `cacheWrite` are parts of it. */
+const usageFromValue = (usage: AnthropicUsage | undefined, options?: AnthropicOptions) => {
+  const cacheRead = usage?.cache_read_input_tokens;
+  const cacheWrite = usage?.cache_creation_input_tokens;
+  const result = makeUsage((usage?.input_tokens ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0), usage?.output_tokens ?? 0);
+  if (cacheRead !== undefined) result.cacheRead = cacheRead;
+  if (cacheWrite !== undefined) result.cacheWrite = cacheWrite;
+  return applyCredits(result, options?.creditsPerInputToken, options?.creditsPerOutputToken);
+};
 
-const mergeUsage = (
-  current: ReturnType<typeof makeUsage>,
-  usage: { input_tokens?: number; output_tokens?: number } | undefined,
-  options?: AnthropicOptions,
-) => {
+/** Stream events report usage in parts; later values replace earlier ones field by field. */
+const mergeRawUsage = (current: AnthropicUsage, usage: AnthropicUsage | undefined): AnthropicUsage => {
   if (!usage) return current;
-  return applyCredits(
-    makeUsage(
-      usage.input_tokens ?? current.input,
-      usage.output_tokens ?? current.output,
-    ),
-    options?.creditsPerInputToken,
-    options?.creditsPerOutputToken,
-  );
+  const next = { ...current };
+  for (const key of ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] as const) {
+    if (typeof usage[key] === "number") next[key] = usage[key];
+  }
+  return next;
 };
 
 const applyResponseFormat = (body: Record<string, unknown>, request: GenerateRequest) => {
@@ -343,7 +342,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
       }
 
       const toolBuffers = new Map<number, { callId: string; name: string; argsBuffer: string }>();
-      let latestUsage = makeUsage();
+      let rawUsage: AnthropicUsage = {};
       let latestFinishReason: GenerateResult["finishReason"] | undefined;
       let syntheticIndex = 0;
       let sawToolCall = false;
@@ -368,7 +367,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         if (event.event === "message_stop") sawMessageStop = true;
 
         if (event.event === "message_start" && payload.message?.usage) {
-          latestUsage = mergeUsage(latestUsage, payload.message.usage, options);
+          rawUsage = mergeRawUsage(rawUsage, payload.message.usage);
         }
 
         if (event.event === "content_block_start" && payload.content_block?.type === "redacted_thinking") {
@@ -441,7 +440,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         }
 
         if (event.event === "message_delta" && payload.usage) {
-          latestUsage = mergeUsage(latestUsage, payload.usage, options);
+          rawUsage = mergeRawUsage(rawUsage, payload.usage);
         }
         if (event.event === "message_delta" && payload.delta?.stop_reason) {
           latestFinishReason = mapFinishReason(payload.delta.stop_reason, sawToolCall || toolBuffers.size > 0);
@@ -453,6 +452,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
         return;
       }
 
+      const latestUsage = usageFromValue(rawUsage, options);
       if (latestUsage.total > 0 || latestFinishReason) {
         yield { type: "usage", usage: latestUsage, finishReason: latestFinishReason };
       }

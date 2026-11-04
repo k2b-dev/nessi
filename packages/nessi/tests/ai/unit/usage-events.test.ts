@@ -1,0 +1,96 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import { anthropic, openAICompatible } from "../../../src/ai/index.js";
+import type { RawStreamEvent, StreamEvent } from "../../../src/ai/types.js";
+import { normalizeProviderStream } from "../../../src/ai/shared/tool-stream-normalizer.js";
+import { mergeUsage } from "../../../src/aggregates.js";
+import { jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
+
+const request = { messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "Hi" }] }] };
+const sse = (...records: Array<[string | undefined, unknown]>) => records
+  .map(([event, data]) => `${event ? `event: ${event}\n` : ""}data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`)
+  .join("");
+
+const collect = async (events: AsyncIterable<StreamEvent>) => {
+  const all: StreamEvent[] = [];
+  for await (const event of events) all.push(event);
+  return all;
+};
+
+const textBlocks = (events: StreamEvent[]) =>
+  events.flatMap((event) => (event.type === "block_end" && event.block.type === "text" ? [event.block.text] : []));
+
+describe("interim usage events", () => {
+  it("do not split the open text block", async () => {
+    const raw = async function* (): AsyncIterable<RawStreamEvent> {
+      yield { type: "text", delta: "Hel" };
+      yield { type: "usage", usage: { input: 3, output: 1, total: 4 } };
+      yield { type: "text", delta: "lo" };
+      yield { type: "usage", usage: { input: 3, output: 2, total: 5 }, finishReason: "stop" };
+    };
+    expect(textBlocks(await collect(normalizeProviderStream(raw())))).toEqual(["Hello"]);
+  });
+
+  it("keep one text block when a gateway sends usage with every chunk", async () => {
+    const usage = (output: number) => ({ prompt_tokens: 3, completion_tokens: output, total_tokens: 3 + output });
+    stubFetch(() => textResponse(sse(
+      [undefined, { choices: [{ index: 0, delta: { content: "Hel" }, finish_reason: null }], usage: usage(1) }],
+      [undefined, { choices: [{ index: 0, delta: { content: "lo" }, finish_reason: null }], usage: usage(2) }],
+      [undefined, { choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: usage(2) }],
+      [undefined, "[DONE]"],
+    ), "text/event-stream"));
+    const events = await collect(openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" }).stream(request));
+    expect(textBlocks(events)).toEqual(["Hello"]);
+  });
+});
+
+describe("cache usage", () => {
+  const openai = () => openAICompatible({ name: "test", model: "test", baseURL: "https://example.test" });
+  const cachedUsage = { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 80 } };
+
+  it("reads OpenAI cached prompt tokens as a part of input", async () => {
+    stubFetch(() => jsonResponse({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }], usage: cachedUsage }));
+    expect((await openai().complete(request)).usage).toEqual({ input: 100, output: 5, total: 105, cacheRead: 80, creditsUsed: 0 });
+
+    stubFetch(() => textResponse(sse(
+      [undefined, { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }],
+      [undefined, { choices: [], usage: cachedUsage }],
+      [undefined, "[DONE]"],
+    ), "text/event-stream"));
+    const events = await collect(openai().stream(request));
+    expect(events.at(-1)).toMatchObject({ type: "usage", usage: { input: 100, cacheRead: 80, total: 105 } });
+  });
+
+  const anthropicUsage = { input_tokens: 10, cache_read_input_tokens: 50, cache_creation_input_tokens: 20 };
+  const expected = { input: 80, output: 4, total: 84, cacheRead: 50, cacheWrite: 20 };
+
+  it("counts Anthropic cache reads and writes into input once", async () => {
+    stubFetch(() => jsonResponse({
+      id: "msg_1",
+      content: [{ type: "text", text: "ok" }],
+      stop_reason: "end_turn",
+      usage: { ...anthropicUsage, output_tokens: 4 },
+    }));
+    const provider = anthropic("test", { apiKey: "test", baseURL: "https://example.test" });
+    expect((await provider.complete(request)).usage).toMatchObject(expected);
+
+    stubFetch(() => textResponse(sse(
+      ["message_start", { type: "message_start", message: { usage: { ...anthropicUsage, output_tokens: 1 } } }],
+      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } }],
+      ["content_block_stop", { type: "content_block_stop", index: 0 }],
+      // A later event repeats only some counters; the cache counters from message_start stay.
+      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }],
+      ["message_stop", { type: "message_stop" }],
+    ), "text/event-stream"));
+    const events = await collect(provider.stream(request));
+    expect(events.at(-1)).toMatchObject({ type: "usage", usage: expected });
+  });
+
+  it("adds cache writes across turns", () => {
+    expect(mergeUsage({ input: 10, output: 1, total: 11, cacheWrite: 4 }, { input: 5, output: 1, total: 6, cacheWrite: 2, cacheRead: 3 }))
+      .toEqual({ input: 15, output: 2, total: 17, cacheWrite: 6, cacheRead: 3 });
+  });
+});
