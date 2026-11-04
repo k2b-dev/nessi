@@ -4,7 +4,7 @@ import type {
   CompactOptions,
   CompactResult,
 } from "./types.js";
-import { createLoopId, zeroUsage, toErrorMessage } from "./utils.js";
+import { createLoopId, followAbortSignal, zeroUsage, toErrorMessage } from "./utils.js";
 
 /**
  * Run compaction as a loop-style operation so consumers can iterate or subscribe to events.
@@ -26,10 +26,7 @@ export const compact = (options: CompactOptions): CompactLoop => {
   const loopId = requestedLoopId?.trim() ? requestedLoopId : createLoopId();
   const eventFields = { agentId, loopId };
 
-  if (externalSignal) {
-    if (externalSignal.aborted) abortController.abort();
-    else externalSignal.addEventListener("abort", () => abortController.abort(), { once: true });
-  }
+  const detachExternalSignal = followAbortSignal(externalSignal, abortController);
 
   const signal = abortController.signal;
 
@@ -41,6 +38,14 @@ export const compact = (options: CompactOptions): CompactLoop => {
   })
 
   async function* run(): AsyncGenerator<CompactEvent> {
+    try {
+      yield* compactOnce();
+    } finally {
+      detachExternalSignal();
+    }
+  }
+
+  async function* compactOnce(): AsyncGenerator<CompactEvent> {
     let entriesBefore = 0;
     yield { type: "loop_start", ...eventFields };
 

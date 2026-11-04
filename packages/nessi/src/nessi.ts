@@ -31,6 +31,7 @@ import { aggregateFromTurns, buildLoopTiming, cloneUsage } from "./aggregates.js
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./ai/shared/messages.js";
 import { toolToSpec } from "./tools.js";
 import {
+  followAbortSignal,
   closeUnansweredToolCalls,
   createLoopId,
   projectHistoricalToolResults,
@@ -615,10 +616,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   };
 
-  if (externalSignal) {
-    if (externalSignal.aborted) abortController.abort();
-    else externalSignal.addEventListener("abort", () => abortController.abort(), { once: true });
-  }
+  const detachExternalSignal = followAbortSignal(externalSignal, abortController);
 
   const signal = abortController.signal;
 
@@ -1720,7 +1718,16 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     }
   }
 
-  const eventSource = coalesce ? coalesceOutboundEvents(closeOpenTurns(run()), coalesce) : closeOpenTurns(run());
+  async function* detachWhenDone(source: AsyncGenerator<OutboundEvent>): AsyncGenerator<OutboundEvent> {
+    try {
+      yield* source;
+    } finally {
+      detachExternalSignal();
+    }
+  }
+
+  const events = detachWhenDone(closeOpenTurns(run()));
+  const eventSource = coalesce ? coalesceOutboundEvents(events, coalesce) : events;
   const generator = eventSource[Symbol.asyncIterator]();
 
   const loop: NessiLoop = {
