@@ -185,6 +185,12 @@ export type ToolDefinition<TInput extends z.ZodType = z.ZodType, TOutput extends
    * a tool `"safe"` when running it twice does no harm, for example a read.
    */
   replay?: "safe" | "unsafe";
+  /**
+   * `"parallel"` lets a server tool run at the same time as the neighbouring parallel calls of the
+   * same response. `"serial"` (the default) runs it alone. Tools with `needsApproval` always run
+   * alone. Mark only tools that do not depend on each other's effects, for example reads.
+   */
+  concurrency?: "parallel" | "serial";
   /** Derive a smaller representation that later loops send to the provider instead of the full result. */
   toHistoricalResult?: (context: HistoricalToolResultContext<TInput, TOutput>) => unknown | Promise<unknown>;
 
@@ -256,6 +262,11 @@ export type NessiOptions = {
   coalesce?: CoalesceOptions;
   /** Max chars for tool results in the context sent to the provider. Longer results are truncated. */
   maxToolResultChars?: number;
+  /**
+   * How many parallel tool calls run at the same time. Default 4: in sampled Cloud chats, 98 % of
+   * the responses with tool calls had at most three.
+   */
+  maxParallelToolCalls?: number;
   signal?: AbortSignal;
 }
 

@@ -30,6 +30,11 @@ export type ToolCallBlock = {
   args: Record<string, unknown>;
   /** Opaque provider signature for this call; sent back unchanged. */
   signature?: string;
+  /**
+   * Set by `nessi()` on stored calls that run together with their neighbouring parallel calls, so a
+   * resumed loop knows which calls may have been running. Not sent to providers.
+   */
+  parallel?: true;
 };
 
 export type AssistantContentBlock = TextBlock | ThinkingBlock | ToolCallBlock;
