@@ -124,3 +124,15 @@ export const followAbortSignal = (signal: AbortSignal | undefined, controller: A
   signal.addEventListener("abort", abort, { once: true });
   return () => signal.removeEventListener("abort", abort);
 };
+
+/**
+ * Fails on options that @k2b/nessi 1.0 removed and that changed behavior, so a caller that still
+ * passes one (for example from JavaScript or a spread object) does not get a silently different run.
+ */
+export const rejectRemovedOptions = (options: object, removed: Record<string, string>, api: string) => {
+  for (const [name, hint] of Object.entries(removed)) {
+    if (Object.hasOwn(options, name) && Reflect.get(options, name) !== undefined) {
+      throw new TypeError(`${api}: the "${name}" option was removed in @k2b/nessi 1.0. ${hint}`);
+    }
+  }
+};

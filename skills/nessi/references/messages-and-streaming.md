@@ -142,7 +142,7 @@ Event meanings:
 - `issue`: structured provider, timeout, malformed/cancelled tool-stream, tool-execution, or runtime problem.
 - `usage`: token usage, sometimes with final `finishReason`.
 
-Every `turn_start` gets a matching `turn_end`, including failed or aborted turns (partial message with `stopReason` `"error"` or `"interrupted"`; an abort during tool execution keeps the stored message). Usage reported before a failure still counts in the aggregate and credits. A provider-side stop (`finishReason: "error"`, such as a safety filter) skips that turn's tool calls, also on later resumes, and ends the loop with `"error"`.
+Every `turn_start` gets a matching `turn_end`, including failed or aborted turns (partial message with `stopReason` `"error"` or `"interrupted"`; an abort during tool execution keeps the stored message). Usage reported before a failure still counts in the aggregate. A provider-side stop (`finishReason: "error"`, such as a safety filter) skips that turn's tool calls, also on later resumes, and ends the loop with `"error"`.
 
 Root `nessi()` loops forward provider block events and add `loopId`, `turnId`, and `turnIndex`:
 
@@ -234,19 +234,16 @@ type Usage = {
   output: number;
   total: number;
   cacheRead?: number;
-  creditsUsed?: number;
 };
 ```
 
 `input` counts every prompt token, including cached ones. `cacheRead` is the
 part of `input` the endpoint read from its prompt cache
-(`prompt_tokens_details.cached_tokens`). `creditsUsed` prices all of `input` at
-`creditsPerInputToken`.
+(`prompt_tokens_details.cached_tokens`). nessi does not price usage; apply
+prices in the application.
 
 A `usage` event without `finishReason` is an interim count; the final one
 carries the finish reason.
-
-If the provider was configured with `creditsPerInputToken` and `creditsPerOutputToken`, `creditsUsed` is attached when usage is available.
 
 Loop aggregates also include timing:
 
@@ -288,7 +285,7 @@ calls from an answer that was aborted while being generated
 (`stopReason: "interrupted"`). Those, and any call before new `input`, reach the
 provider as interrupted error results. A `compact` function receives the loop signal as `ctx.signal`.
 
-Use `reasoningEffort` to control reasoning: `"none"` for simple calls where reasoning would spend the output budget, or a level such as `"low"` or `"high"`. The value passes through unchanged and works on provider defaults, single calls and root loops; a call value wins. `extraBody` adds request fields Nessi does not model. `disableReasoning` is deprecated. Root `nessi()` accepts the same generation controls:
+Use `reasoningEffort` to control reasoning: `"none"` for simple calls where reasoning would spend the output budget, or a level such as `"low"` or `"high"`. The value passes through unchanged and works on provider defaults, single calls and root loops; a call value wins. `extraBody` adds request fields Nessi does not model. Root `nessi()` accepts the same generation controls:
 
 ```ts
 const loop = nessi({

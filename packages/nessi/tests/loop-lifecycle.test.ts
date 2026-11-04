@@ -246,17 +246,15 @@ describe("nessi loop lifecycle", () => {
 
   it("closes a failed turn, keeps its partial answer and counts its usage", async () => {
     const store = memoryStore();
-    let deducted = 0;
     const events = await collect(nessi({
       provider: mockProvider([
         { type: "text", delta: "Half an ans" },
-        { type: "usage", usage: { input: 10, output: 4, total: 14, creditsUsed: 2 } },
+        { type: "usage", usage: { input: 10, output: 4, total: 14 } },
         { type: "error", error: "connection reset", retryable: true },
       ]),
       store,
       systemPrompt: "sys",
       input: "go",
-      creditStore: { remaining: async () => 100, deduct: async (credits) => { deducted += credits; } },
     }));
 
     expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
@@ -265,7 +263,6 @@ describe("nessi loop lifecycle", () => {
     expect(turnEnd.message).toMatchObject({ stopReason: "error", content: [{ type: "text", text: "Half an ans" }] });
     const end = events.at(-1) as Extract<OutboundEvent, { type: "loop_end" }>;
     expect(end).toMatchObject({ reason: "error", aggregate: { usage: { input: 10, output: 4, total: 14 } } });
-    expect(deducted).toBe(2);
     const stored = (await store.load()).map((entry) => entry.message);
     expect(stored.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
   });
@@ -436,47 +433,6 @@ describe("nessi loop lifecycle", () => {
     expect(events.map((event) => event.type).filter((type) => type.startsWith("turn_") || type === "loop_end"))
       .toEqual(["turn_start", "turn_end", "loop_end"]);
     expect(events.at(-1)).toMatchObject({ reason: "error", aggregate: { usage: { total: 7 } } });
-  });
-
-  it("records a failed credit deduction in the turn's issues", async () => {
-    const events = await collect(nessi({
-      provider: mockProvider([
-        { type: "text", delta: "part" },
-        { type: "usage", usage: { input: 1, output: 1, total: 2, creditsUsed: 1 } },
-        { type: "error", error: "boom", retryable: true },
-      ]),
-      store: memoryStore(),
-      systemPrompt: "sys",
-      input: "go",
-      creditStore: { remaining: async () => 10, deduct: async () => { throw new Error("ledger offline"); } },
-    }));
-
-    const end = events.at(-1) as Extract<OutboundEvent, { type: "loop_end" }>;
-    expect(end.aggregate.turns[0]?.issues?.some((issue) => issue.message.includes("ledger offline"))).toBe(true);
-  });
-
-  it("still charges credits when storing the answer fails", async () => {
-    const store = memoryStore();
-    let deducted = 0;
-    let appends = 0;
-    await collect(nessi({
-      provider: mockProvider([
-        { type: "text", delta: "Answer" },
-        { type: "usage", usage: { input: 1, output: 1, total: 2, creditsUsed: 3 } },
-      ]),
-      store: {
-        load: () => store.load(),
-        append: async (...args: Parameters<typeof store.append>) => {
-          if (++appends > 1) throw new Error("disk full");
-          await store.append(...args);
-        },
-      },
-      systemPrompt: "sys",
-      input: "go",
-      creditStore: { remaining: async () => 10, deduct: async (credits) => { deducted += credits; } },
-    }));
-
-    expect(deducted).toBe(3);
   });
 
   it("does not run calls after Mistral reports finish_reason error", async () => {

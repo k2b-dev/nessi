@@ -68,8 +68,7 @@ Every outbound event from one `nessi()` run carries the same `loopId`. Pass your
 also when a turn fails or is aborted. A turn that fails or is aborted while the
 model is still answering carries the partial message with `stopReason`
 `"error"` or `"interrupted"`; an abort during tool execution carries the stored
-message. Usage the provider already reported counts in the aggregate and
-against the credit store. Partial content is stored, except for a context
+message. Usage the provider already reported counts in the aggregate. Partial content is stored, except for a context
 overflow, which is retried after compaction or ends the loop. When the provider
 itself stops an answer (`finishReason: "error"`, e.g. a content or safety
 filter), its tool calls are not executed, not even by a later resume, and the
@@ -125,23 +124,6 @@ const inspect = defineTool({
   return inspectItem(id, { callId: ctx.callId, signal: ctx.signal });
 });
 ```
-
-`nessi.structured()` accepts the same pattern for server tools:
-
-```ts
-const result = await nessi.structured({
-  provider,
-  input: "Resolve the current task.",
-  output: taskSchema,
-  tools: () => toolRegistry.activeServerTools(),
-});
-```
-
-A structured tool resolver always selects `tool_loop` mode, even when a
-snapshot is empty, because later turns may add tools. Nessi appends its internal
-`submit_result` tool to every snapshot. Client tools, approval tools, and a
-user-defined `submit_result` remain unsupported. A static empty array keeps the
-direct native/fallback structured-output path.
 
 ## Historical tool results
 
@@ -253,15 +235,12 @@ images.
 Failures throw `StructuredOutputError` with a `code`: `invalid_output`,
 `truncated` (the response hit the output token limit), `provider_stopped` (the
 provider ended it with an error, a refusal, or an interruption), `aborted`,
-`loop_failed`, `max_turns`, or `unsupported_tool`. In both modes, output from a
-response that did not end normally is never accepted, and direct mode never
-repairs it. Provider and output failures carry `details.aggregate` with the
-usage and timing of the responses that completed.
+or `loop_failed`. Output from a response that did not end normally is never
+accepted or repaired. Failures carry `details.aggregate` with the usage and
+timing of the responses that completed.
 
-`nessi.structured()` can use server tools for bounded task work. It adds an
-internal `submit_result` tool and returns after that tool receives a valid
-schema value. Client tools, approval tools, and interactive tool bridges remain
-the job of the full `nessi()` loop.
+`nessi.structured()` makes one provider call (plus at most one repair) and
+takes no tools; use the full `nessi()` loop for tool work.
 
 ## Provider-only usage
 
@@ -379,9 +358,6 @@ Mistral's typed `thinking` chunks, `details` for OpenRouter's
 name, as typed chunks when `compat.thinkingFormat` is `"content_chunks"`.
 Store assistant messages as they are, including these fields, and keep history
 append-only.
-
-`disableReasoning` is deprecated. It keeps its original behavior and sends
-`reasoning_effort: "low"`. It is ignored when the call sets `reasoningEffort`.
 
 ### Extra request fields
 
@@ -598,7 +574,6 @@ import { systemOneDecision } from "@k2b/nessi/ai/providers/systemone-decision";
 - Pluggable session store
 - Optional history compaction
 - Standalone `compact()` loop with `loop_start`, `compaction_start`, `compaction_end`, `issue`, and `loop_end` events
-- Optional token-credit budgeting
 - Provider adapters with shared `complete()` and `stream()` APIs
 - Audio transcription through configurable OpenAI-compatible services
 - One chat adapter, `openAICompatible()`, with explicit options for OpenAI, OpenRouter, Mistral, vLLM, and other Chat Completions endpoints (see the skill's `providers.md`)

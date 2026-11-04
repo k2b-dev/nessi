@@ -205,36 +205,10 @@ performs one repair attempt if the first response is invalid.
 Failures throw `StructuredOutputError` with a `code`: `invalid_output`,
 `truncated` (the response hit the output token limit), `provider_stopped` (the
 provider ended it with an error, a refusal, or an interruption), `aborted`,
-`loop_failed`, `max_turns`, or `unsupported_tool`. In both modes, output from a
-response that did not end normally is never accepted, and direct mode never
-repairs it. Provider and output failures carry `details.aggregate` with the
-usage and timing of the responses that completed.
-
-`nessi.structured()` may use server tools:
-
-```ts
-const lookupCustomer = defineTool({
-  name: "lookup_customer",
-  description: "Find a customer by email.",
-  inputSchema: z.object({ email: z.string().email() }),
-}).server(async ({ email }) => {
-  return { email, tier: "pro" };
-});
-
-const result = await nessi.structured({
-  provider,
-  input: "Find ada@example.com and return the account summary.",
-  output: z.object({
-    email: z.string().email(),
-    tier: z.string(),
-  }),
-  tools: [lookupCustomer],
-  maxTurns: 6,
-});
-```
-
-Only pass server tools that do not need approval. Use the full `nessi()` loop
-for client tools, approvals, UI actions, or custom interactive tool bridges.
+or `loop_failed`. Output from a response that did not end normally is never
+accepted or repaired. Failures carry `details.aggregate` with the usage and
+timing of the responses that completed. `nessi.structured()` takes no tools; use
+the full `nessi()` loop for tool work.
 
 ## One-shot completion
 

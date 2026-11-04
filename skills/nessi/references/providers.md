@@ -166,8 +166,7 @@ Provider mappings:
 - `extraBody` (provider and call) merges extra fields into the request body;
   plain objects merge deeply. Use it for parameters nessi does not model, e.g.
   vLLM `chat_template_kwargs: { enable_thinking: false }`.
-- `disableReasoning` is deprecated and keeps its old mapping; prefer
-  `reasoningEffort: "none"`.
+- Use `reasoningEffort: "none"` to turn reasoning off (`disableReasoning` was removed in 1.0).
 
 ## Chat endpoints
 
@@ -210,14 +209,12 @@ Other Chat Completions endpoints work the same way, for example Ollama's
 The other options:
 
 - `contextWindow` when the app wants overflow heuristics.
-- `creditsPerInputToken` and `creditsPerOutputToken` for cost accounting.
 - `headers` for extra request headers.
 - `timeouts` as below.
 
 Compared with the removed `mistral()` factory, the request no longer sets
 `parallel_tool_calls: true` (Mistral's default is the same; add it through
-`extraBody` if needed), and the deprecated `disableReasoning` sends
-`reasoning_effort: "low"` like every endpoint.
+`extraBody` if needed).
 
 **Migrating from 0.19:** the `openai()`, `openrouter()`, `vllm()`, `mistral()`,
 `anthropic()`, `gemini()`, and `ollama()` factories are gone. Use

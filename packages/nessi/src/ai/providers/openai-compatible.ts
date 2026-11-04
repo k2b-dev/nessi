@@ -7,7 +7,7 @@ import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { createStrictToolCallIdFactory, fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
 import { toOpenAITools } from "../shared/tools.js";
-import { applyCredits, makeUsage } from "../shared/usage.js";
+import { makeUsage } from "../shared/usage.js";
 import type {
   AssistantContentBlock,
   AssistantStopReason,
@@ -247,16 +247,12 @@ const convertMessages = (messages: Message[], systemPrompt: string | undefined, 
   return result;
 };
 
-const usageFromChunk = (chunk: SSEChunk, config: OpenAICompatibleConfig): Usage | undefined => {
+const usageFromChunk = (chunk: SSEChunk): Usage | undefined => {
   if (!chunk.usage) return undefined;
   const usage = makeUsage(chunk.usage.prompt_tokens ?? 0, chunk.usage.completion_tokens ?? 0);
   const cacheRead = chunk.usage.prompt_tokens_details?.cached_tokens;
   if (typeof cacheRead === "number") usage.cacheRead = cacheRead;
-  return applyCredits(
-    usage,
-    config.creditsPerInputToken,
-    config.creditsPerOutputToken,
-  );
+  return usage;
 };
 
 const thinkingFromDelta = (delta: OpenAIStreamDelta, config: OpenAICompatibleConfig) => {
@@ -300,7 +296,7 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
     return { type: "tool_call", id: call.id ?? `${idPrefix}-${index}`, name, args };
   });
 
-  const usage = usageFromChunk(payload, config);
+  const usage = usageFromChunk(payload);
   // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
   const refusal = message?.refusal || "";
   const finishReason = refusal ? "error" : mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
@@ -323,19 +319,12 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   };
 };
 
-/**
- * Sends the reasoning effort in the configured wire format. The deprecated `disableReasoning`
- * keeps its original `reasoning_effort: "low"` mapping.
- */
+/** Sends the reasoning effort in the configured wire format. */
 const applyReasoning = (body: Record<string, unknown>, request: GenerateRequest, config: OpenAICompatibleConfig) => {
-  const reasoning = resolveReasoning(request, config);
-  if (reasoning.legacyDisable) {
-    body.reasoning_effort = "low";
-    return;
-  }
-  if (reasoning.effort === undefined) return;
-  if (config.compat?.reasoningFormat === "openrouter") body.reasoning = { effort: reasoning.effort };
-  else body.reasoning_effort = reasoning.effort;
+  const effort = resolveReasoning(request, config);
+  if (effort === undefined) return;
+  if (config.compat?.reasoningFormat === "openrouter") body.reasoning = { effort };
+  else body.reasoning_effort = effort;
 };
 
 export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
@@ -517,7 +506,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
 
         const choice = chunk.choices?.[0];
-        const usage = usageFromChunk(chunk, config);
+        const usage = usageFromChunk(chunk);
         if (!choice) {
           if (usage) {
             latestUsage = usage;

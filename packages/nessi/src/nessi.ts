@@ -36,6 +36,7 @@ import {
   createLoopId,
   estimateContextTokens,
   projectHistoricalToolResults,
+  rejectRemovedOptions,
   toErrorMessage,
   truncateToolResults,
   zeroUsage,
@@ -492,6 +493,10 @@ const coalesceOutboundEvents = async function* (
 // ----------------------------------------------------------------------------
 
 export const nessi = (options: NessiOptions): NessiLoop => {
+  rejectRemovedOptions(options, {
+    creditStore: "Check budgets in the application, for example from loop_end.aggregate.usage.",
+    disableReasoning: 'Use reasoningEffort: "none".',
+  }, "nessi()");
   const {
     agentId = "main",
     loopId: requestedLoopId,
@@ -500,13 +505,11 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     systemPrompt,
     tools: toolSource = [],
     store,
-    creditStore,
     compact,
     steering,
     maxTurns = Infinity,
     temperature,
     maxOutputTokens,
-    disableReasoning,
     reasoningEffort,
     extraBody,
     coalesce,
@@ -517,7 +520,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
   const channel = createChannel<InboundEvent>();
   const deferredInbound: InboundEvent[] = [];
   const steerQueue: string[] = [];
-  const subscribers: Array<(event: OutboundEvent) => void> = [];
   const abortController = new AbortController();
   let lastUsage: Usage = zeroUsage();
   const loopTurns: LoopTurnAggregate[] = [];
@@ -1308,14 +1310,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           return;
         }
 
-        if (creditStore) {
-          const remaining = await creditStore.remaining();
-          if (remaining <= 0) {
-            yield loopEndEvent("no_credits");
-            return;
-          }
-        }
-
         const steeringApplied = yield* applyPendingSteering();
         if (steeringApplied) {
           providerTurn = 0;
@@ -1405,7 +1399,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
 
         /**
          * Ends a turn that did not complete normally: emits turn_end, counts usage the provider
-         * already reported (aggregate and credits) and optionally keeps partial content in history.
+         * already reported (aggregate) and optionally keeps partial content in history.
          */
         const closeUnfinishedTurn = async function* (
           reason: "interrupted" | "error",
@@ -1413,7 +1407,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         ): AsyncGenerator<OutboundEvent> {
           const message = makePartialMessage(reason);
           const usage = turnUsageReported ? turnUsage : undefined;
-          // Storage or credit failures are reported but must not keep the turn open.
+          // Storage failures are reported but must not keep the turn open.
           const reportFailure = function* (what: string, error: unknown): Generator<OutboundEvent> {
             const issue = runtimeIssue(new Error(`${what}: ${toErrorMessage(error)}`));
             recordIssue(issue, turnIssues);
@@ -1424,13 +1418,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
               await store.append(message);
             } catch (error) {
               yield* reportFailure("Storing the partial assistant message failed", error);
-            }
-          }
-          if (creditStore && usage?.creditsUsed && usage.creditsUsed > 0) {
-            try {
-              await creditStore.deduct(usage.creditsUsed);
-            } catch (error) {
-              yield* reportFailure("Deducting credits failed", error);
             }
           }
           if (message.content.length > 0 || usage) {
@@ -1452,7 +1439,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             tools: providerTools,
             temperature,
             maxOutputTokens,
-            disableReasoning,
             reasoningEffort,
             extraBody,
             signal,
@@ -1615,13 +1601,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         } catch (error) {
           storeFailed = true;
           storeError = error;
-        }
-        if (creditStore && turnUsage.creditsUsed && turnUsage.creditsUsed > 0) {
-          try {
-            await creditStore.deduct(turnUsage.creditsUsed);
-          } catch (error) {
-            if (!storeFailed) throw error;
-          }
         }
         if (storeFailed) throw storeError;
 
@@ -1792,18 +1771,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
       return {
         async next() {
           attachExternalSignal();
-          const result = await generator.next();
-          if (!result.done && result.value) {
-            try {
-              for (const listener of subscribers) listener(result.value);
-            } catch (error) {
-              // A failing subscriber ends the loop; the suspended generator never reaches its cleanup.
-              abortController.abort();
-              detachExternalSignal();
-              throw error;
-            }
-          }
-          return result;
+          return generator.next();
         },
         async return(value?: OutboundEvent) {
           // Stopping iteration early ends the loop: cancel running tools and provider requests.
@@ -1815,13 +1783,6 @@ export const nessi = (options: NessiOptions): NessiLoop => {
           detachExternalSignal();
           return generator.throw(error);
         },
-      };
-    },
-    subscribe(listener: (event: OutboundEvent) => void) {
-      subscribers.push(listener);
-      return () => {
-        const idx = subscribers.indexOf(listener);
-        if (idx >= 0) subscribers.splice(idx, 1);
       };
     },
     push(event: InboundEvent) {

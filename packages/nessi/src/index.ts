@@ -25,7 +25,6 @@ export type {
   StructuredMode,
   StructuredOptions,
   StructuredResult,
-  StructuredToolResolver,
   // Content
   ContentPart,
   JsonSchemaObject,
@@ -82,6 +81,4 @@ export type {
   CompactDoneReason,
   CompactEvent,
   CompactLoop,
-  // Credits
-  CreditStore,
 } from "./types.js";

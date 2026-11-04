@@ -1,18 +1,8 @@
 import type { GenerateRequest, ProviderRequestDefaults, ReasoningEffort } from "../types.js";
 
-export type ResolvedReasoning = {
-  /** Effort to send, or undefined to leave the model default. */
-  effort?: ReasoningEffort;
-  /** The deprecated `disableReasoning` applies; providers keep its original mapping. */
-  legacyDisable: boolean;
-};
-
-/** Request settings win over provider defaults; `disableReasoning` counts as a request setting. */
-export const resolveReasoning = (request: GenerateRequest, defaults?: ProviderRequestDefaults): ResolvedReasoning => {
-  if (request.reasoningEffort !== undefined) return { effort: request.reasoningEffort, legacyDisable: false };
-  if (request.disableReasoning) return { legacyDisable: true };
-  return { effort: defaults?.reasoningEffort, legacyDisable: false };
-};
+/** The effort to send: the request's, else the provider default, else undefined (model default). */
+export const resolveReasoning = (request: GenerateRequest, defaults?: ProviderRequestDefaults): ReasoningEffort | undefined =>
+  request.reasoningEffort ?? defaults?.reasoningEffort;
 
 /** Only object literals (or null-prototype objects) merge; dates, class instances and arrays replace. */
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {

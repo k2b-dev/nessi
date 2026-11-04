@@ -197,23 +197,6 @@ const audit = defineTool({
 });
 ```
 
-`nessi.structured()` accepts a resolver with the same per-turn snapshot
-semantics, limited to server tools without approval:
-
-```ts
-const result = await nessi.structured({
-  provider,
-  input: "Resolve the report.",
-  output: reportSchema,
-  tools: async () => registry.activeServerTools(),
-});
-```
-
-Providing a resolver always selects `tool_loop`, including when the current
-snapshot is empty. Nessi adds `submit_result` to every snapshot and rejects
-client tools, approval tools, and a user tool with that reserved name. A static
-empty tool array continues to use direct native/fallback structured output.
-
 ## Historical tool results
 
 Use `toHistoricalResult` for tools whose raw output is useful during execution

@@ -64,7 +64,7 @@ describe("cache usage", () => {
 
   it("reads OpenAI cached prompt tokens as a part of input", async () => {
     stubFetch(() => jsonResponse({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }], usage: cachedUsage }));
-    expect((await openai().complete(request)).usage).toEqual({ input: 100, output: 5, total: 105, cacheRead: 80, creditsUsed: 0 });
+    expect((await openai().complete(request)).usage).toEqual({ input: 100, output: 5, total: 105, cacheRead: 80 });
 
     stubFetch(() => textResponse(sse(
       [undefined, { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }],

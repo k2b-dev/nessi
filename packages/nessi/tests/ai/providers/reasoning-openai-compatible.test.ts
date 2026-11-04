@@ -51,12 +51,6 @@ describe("reasoning effort for OpenAI-compatible providers", () => {
     }
   });
 
-  it("keeps the deprecated disableReasoning mapping", async () => {
-    for (const body of await sentBodies(endpoint("vllm", { model: "m", reasoningEffort: "high" }), { disableReasoning: true })) {
-      expect(body.reasoning_effort).toBe("low");
-    }
-  });
-
   it("merges extraBody from provider and request over the generated body", async () => {
     const provider = custom({ extraBody: { chat_template_kwargs: { enable_thinking: false }, top_k: 20 } });
     const bodies = await sentBodies(provider, { temperature: 0.2, extraBody: { chat_template_kwargs: { foo: 1 }, temperature: 0.7 } });

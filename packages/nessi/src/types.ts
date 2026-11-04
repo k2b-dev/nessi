@@ -111,7 +111,7 @@ export type InboundEvent =
   | { type: "approval_response"; callId: string; approved: boolean }
   | { type: "tool_result"; callId: string; result: unknown };
 
-export type DoneReason = "stop" | "no_credits" | "max_turns" | "context_overflow" | "error" | "aborted";
+export type DoneReason = "stop" | "max_turns" | "context_overflow" | "error" | "aborted";
 
 export type LoopToolCallAggregate = {
   callId: string;
@@ -236,7 +236,6 @@ export type NessiOptions = {
   /** Static tools or a resolver evaluated once before every provider turn. */
   tools?: Tool[] | ToolResolver;
   store: SessionStore;
-  creditStore?: CreditStore;
   compact?: CompactFn;
   /** Supplies pending steering messages at safe loop boundaries. */
   steering?: SteeringFn;
@@ -247,8 +246,6 @@ export type NessiOptions = {
   reasoningEffort?: ReasoningEffort;
   /** Extra request body fields for every provider call, merged over the provider's `extraBody`. */
   extraBody?: Record<string, unknown>;
-  /** @deprecated Use `reasoningEffort` instead. Ignored when `reasoningEffort` is set. */
-  disableReasoning?: boolean;
   coalesce?: CoalesceOptions;
   /** Max chars for tool results in the context sent to the provider. Longer results are truncated. */
   maxToolResultChars?: number;
@@ -272,7 +269,6 @@ export type CoalesceOptions = {
 
 export type NessiLoop = {
   [Symbol.asyncIterator](): AsyncIterator<OutboundEvent>;
-  subscribe(listener: (event: OutboundEvent) => void): () => void;
   push(event: InboundEvent): void;
   steer(message: string): void;
   abort(): void;
@@ -280,7 +276,7 @@ export type NessiLoop = {
 
 export type StructuredInput = Input | UserMessage;
 
-export type StructuredMode = "native" | "fallback" | "repair" | "tool_loop";
+export type StructuredMode = "native" | "fallback" | "repair";
 
 export type StructuredMeta = {
   mode: StructuredMode;
@@ -289,10 +285,8 @@ export type StructuredMeta = {
   usedResponseFormat: boolean;
 };
 
-export type StructuredToolResolver = () => ServerTool[] | Promise<ServerTool[]>;
 
 export type StructuredOptions<TOutput extends z.ZodType = z.ZodType> = {
-  agentId?: string;
   /** Correlates the internal structured task. Generated when omitted. */
   loopId?: string;
   provider: Provider;
@@ -300,19 +294,13 @@ export type StructuredOptions<TOutput extends z.ZodType = z.ZodType> = {
   input: StructuredInput;
   output: TOutput;
   outputName?: string;
-  /** Static server tools or a resolver evaluated once before every provider turn. */
-  tools?: ServerTool[] | StructuredToolResolver;
-  maxTurns?: number;
   temperature?: number;
   maxOutputTokens?: number;
   /** Reasoning effort passed to the provider unchanged; "none" turns reasoning off. Overrides the provider default. */
   reasoningEffort?: ReasoningEffort;
   /** Extra request body fields for every provider call, merged over the provider's `extraBody`. */
   extraBody?: Record<string, unknown>;
-  /** @deprecated Use `reasoningEffort` instead. Ignored when `reasoningEffort` is set. */
-  disableReasoning?: boolean;
   signal?: AbortSignal;
-  onEvent?: (event: OutboundEvent) => void;
 }
 
 export type StructuredResult<TOutput> = {
@@ -393,15 +381,5 @@ export type CompactEvent =
 
 export type CompactLoop = {
   [Symbol.asyncIterator](): AsyncIterator<CompactEvent>;
-  subscribe(listener: (event: CompactEvent) => void): () => void;
   abort(): void;
-}
-
-// ----------------------------------------------------------------------------
-// 7. CreditStore
-// ----------------------------------------------------------------------------
-
-export type CreditStore = {
-  remaining(): Promise<number>;
-  deduct(credits: number): Promise<void>;
 }

@@ -27,8 +27,8 @@
     },
     {
       "id": 5,
-      "prompt": "I need a typed task extractor with @k2b/nessi. It should return a validated Zod object, accept an image input, and may call one server-side lookup tool before returning.",
-      "expected_output": "A root nessi.structured() example importing nessi and defineTool from @k2b/nessi, importing a provider from @k2b/nessi/ai, defining a Zod output schema, passing string or multimodal content parts as input, optionally passing only server tools, and reading result.output plus result.structuredMeta/result.aggregate. It should not use provider.complete() for the high-level typed task unless explicitly discussing low-level responseFormat.",
+      "prompt": "I need a typed task extractor with @k2b/nessi. It should return a validated Zod object and accept an image input.",
+      "expected_output": "A root nessi.structured() example importing nessi from @k2b/nessi, importing a provider from @k2b/nessi/ai, defining a Zod output schema, passing string or multimodal content parts as input, passing no tools (structured() takes none; tool work belongs in nessi()), and reading result.output plus result.structuredMeta/result.aggregate. It should not use provider.complete() for the high-level typed task unless explicitly discussing low-level responseFormat.",
       "files": []
     },
     {
