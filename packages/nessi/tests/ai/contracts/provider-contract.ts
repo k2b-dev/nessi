@@ -35,9 +35,15 @@ export async function expectProviderContract(provider: Provider, request: Genera
 
   expect(events.some((event) => event.type === "issue")).toBe(false);
   expect(comparable(streamed.message.content)).toEqual(comparable(result.message.content));
+  expect(details(streamed.message.content)).toEqual(details(result.message.content));
   expect(streamed.finishReason).toBe(result.finishReason);
   expect(streamed.usage).toEqual(result.usage);
 
   const streamedBlocks = events.flatMap((event) => (event.type === "block_end" ? [event.block] : []));
   expect(comparable(streamedBlocks)).toEqual(comparable(result.message.content));
+  return result;
 }
+
+/** Replay data (`details`) of all reasoning blocks, whichever block carries it. */
+const details = (blocks: AssistantContentBlock[]) =>
+  blocks.flatMap((block) => (block.type === "thinking" && block.details ? block.details : []));

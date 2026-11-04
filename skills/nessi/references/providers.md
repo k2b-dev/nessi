@@ -148,12 +148,8 @@ const result = await provider.complete({
 
 Provider mappings:
 
-- OpenAI/OpenRouter/OpenAI-compatible: `response_format.json_schema`
-- vLLM: `structured_outputs.json`
-- Ollama: top-level `format` schema
-- Anthropic: `output_config.format`
-- Mistral: `response_format.json_schema`
-- Gemini: `generationConfig.responseMimeType` plus `responseJsonSchema`
+- `compat.structuredOutput: "response_format"` (OpenAI, OpenRouter, Mistral): `response_format.json_schema`, strict
+- `compat.structuredOutput: "vllm_structured_outputs"` (vLLM, Scaleway): `structured_outputs.json`, guided decoding
 
 ## Reasoning effort and extra request fields
 
@@ -217,6 +213,11 @@ The other options:
 - `creditsPerInputToken` and `creditsPerOutputToken` for cost accounting.
 - `headers` for extra request headers.
 - `timeouts` as below.
+
+Compared with the removed `mistral()` factory, the request no longer sets
+`parallel_tool_calls: true` (Mistral's default is the same; add it through
+`extraBody` if needed), and the deprecated `disableReasoning` sends
+`reasoning_effort: "low"` like every endpoint.
 
 **Migrating from 0.19:** the `openai()`, `openrouter()`, `vllm()`, `mistral()`,
 `anthropic()`, `gemini()`, and `ollama()` factories are gone. Use

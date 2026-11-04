@@ -81,17 +81,11 @@ import { mergeUsage, cloneLoopAggregate, mergeLoopAggregates } from "@k2b/nessi"
 Provider constructors:
 
 ```ts
-import {
-  anthropic,
-  gemini,
-  mistral,
-  ollama,
-  openai,
-  openAICompatible,
-  openrouter,
-  vllm,
-} from "@k2b/nessi/ai";
+import { openAICompatible } from "@k2b/nessi/ai";
 ```
+
+`openAICompatible()` is the only chat adapter; take each endpoint's `compat`
+settings from `references/providers.md`.
 
 Focused provider imports are also available:
 

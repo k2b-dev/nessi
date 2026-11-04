@@ -42,8 +42,8 @@ type OAIResponseContent = string | null | Array<{ type: "text"; text: string } |
 const chunkThinking = (chunk: OAIThinkingChunk) =>
   typeof chunk.thinking === "string" ? chunk.thinking : chunk.thinking.map((part) => part.text ?? "").join("");
 
-/** Content blocks in response order; reasoning chunks keep their signature. */
-const contentBlocks = (content: OAIResponseContent | undefined): AssistantContentBlock[] => {
+/** Content blocks in response order; reasoning chunks keep their signature, or are dropped without `withThinking`. */
+const contentBlocks = (content: OAIResponseContent | undefined, withThinking: boolean): AssistantContentBlock[] => {
   const blocks: AssistantContentBlock[] = [];
   if (typeof content === "string") {
     if (content) appendAssistantContentBlock(blocks, { type: "text", text: content });
@@ -51,7 +51,7 @@ const contentBlocks = (content: OAIResponseContent | undefined): AssistantConten
   }
   for (const chunk of content ?? []) {
     if (chunk.type === "text" && "text" in chunk) appendAssistantContentBlock(blocks, { type: "text", text: chunk.text });
-    else if (chunk.type === "thinking" && "thinking" in chunk) {
+    else if (chunk.type === "thinking" && "thinking" in chunk && withThinking) {
       appendAssistantContentBlock(blocks, {
         type: "thinking",
         thinking: chunkThinking(chunk),
@@ -279,8 +279,11 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
     throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
   }
   const message = choice?.message;
+  const withThinking = config.compat?.thinkingFormat !== "none";
+  const answer = contentBlocks(message?.content, withThinking);
   const thinking: AssistantContentBlock[] = [];
-  if (config.compat?.thinkingFormat !== "none") {
+  // Typed reasoning chunks carry the signature; the plain fields would only repeat their text.
+  if (withThinking && !answer.some((block) => block.type === "thinking")) {
     if (message?.reasoning_details?.length && config.compat?.thinkingFormat !== "text") {
       const details = message.reasoning_details;
       thinking.push({ type: "thinking", thinking: details.map(readableReasoning).join(""), details });
@@ -301,7 +304,6 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   // A refusal is a provider-side stop: it is shown as text, and tool calls in it must not run.
   const refusal = message?.refusal || "";
   const finishReason = refusal ? "error" : mapFinishReason(choice?.finish_reason, toolCalls.length > 0);
-  const answer = contentBlocks(message?.content);
   if (refusal) appendAssistantContentBlock(answer, { type: "text", text: refusal });
 
   return {
@@ -525,7 +527,9 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
         const delta = choice.delta;
 
-        const thinking = thinkingFromDelta(delta, config);
+        // Typed reasoning chunks carry the signature; the plain fields would only repeat their text.
+        const chunkedThinking = Array.isArray(delta.content) && delta.content.some((chunk) => chunk.type === "thinking");
+        const thinking = chunkedThinking ? "" : thinkingFromDelta(delta, config);
         // Reasoning that arrives while a tool call is still streaming waits until the call is complete.
         if (thinking && pendingToolCalls.length > 0) deferredThinking += thinking;
         else if (thinking) yield { type: "thinking", delta: thinking };
@@ -538,7 +542,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           for (const chunk of delta.content ?? []) {
             if (chunk.type === "text" && "text" in chunk) {
               if (chunk.text) yield { type: "text", delta: chunk.text };
-            } else if (chunk.type === "thinking" && "thinking" in chunk) {
+            } else if (chunk.type === "thinking" && "thinking" in chunk && config.compat?.thinkingFormat !== "none") {
               const text = chunkThinking(chunk);
               if (text) yield { type: "thinking", delta: text };
               if (chunk.signature) yield { type: "thinking", delta: "", signature: chunk.signature };

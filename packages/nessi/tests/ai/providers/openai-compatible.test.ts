@@ -348,3 +348,28 @@ describe("openAICompatible provider", () => {
     expect(events.at(-1)).toMatchObject({ type: "usage", finishReason: "tool_use" });
   });
 });
+
+describe("typed reasoning chunks", () => {
+  const chunked = { choices: [{ index: 0, message: { reasoning_content: "Plan.", content: [{ type: "thinking", thinking: [{ type: "text", text: "Plan." }], signature: "s" }, { type: "text", text: "Hi" }] }, finish_reason: "stop" }] };
+  const chunkedStream = [
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: "Plan.", content: [{ type: "thinking", thinking: [{ type: "text", text: "Plan." }], signature: "s" }] }, finish_reason: null }] })}`,
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: "stop" }] })}`,
+    "data: [DONE]",
+  ].join("\n\n") + "\n\n";
+
+  it("emits one reasoning block when a frame carries the same reasoning twice", async () => {
+    const provider = endpoint("vllm", { baseURL: "https://example.test" });
+    stubFetch(() => jsonResponse(chunked));
+    expect((await provider.complete({ messages: [] })).message.content).toEqual([{ type: "thinking", thinking: "Plan.", signature: "s" }, { type: "text", text: "Hi" }]);
+    stubFetch(() => textResponse(chunkedStream, "text/event-stream"));
+    expect((await completeFromStream(provider, { messages: [] })).message.content).toEqual([{ type: "thinking", thinking: "Plan.", signature: "s" }, { type: "text", text: "Hi" }]);
+  });
+
+  it("hides typed reasoning chunks with thinkingFormat none", async () => {
+    const provider = endpoint("openai", { baseURL: "https://example.test" });
+    stubFetch(() => jsonResponse(chunked));
+    expect((await provider.complete({ messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
+    stubFetch(() => textResponse(chunkedStream, "text/event-stream"));
+    expect((await completeFromStream(provider, { messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
+  });
+});
