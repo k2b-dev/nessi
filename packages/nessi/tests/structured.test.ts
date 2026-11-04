@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { z } from "zod";
 import { defineTool, nessi, StructuredOutputError } from "../src/index.js";
 import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
+import { openai, vllm } from "../src/ai/index.js";
 import type { GenerateResult, Provider } from "../src/ai/index.js";
 import type { ProviderRequest } from "../src/types.js";
 
@@ -44,6 +45,49 @@ const completeProvider = (responses: string[], structuredOutput: boolean) => {
 };
 
 describe("nessi.structured", () => {
+  describe("native schema support", () => {
+    const usesNative = async (
+      output: z.ZodType,
+      capabilities: Partial<Provider["capabilities"]> = {},
+      answer = "{}",
+    ) => {
+      const { provider, requests } = completeProvider([answer], true);
+      provider.capabilities = { ...provider.capabilities, ...capabilities };
+      const result = await nessi.structured({ provider, input: "Extract.", output }).catch(() => undefined);
+      const native = requests[0]?.responseFormat !== undefined;
+      if (native && answer !== "{}") expect(result?.structuredMeta.mode).toBe("native");
+      return native;
+    };
+
+    it("sends nullable fields and unions natively", async () => {
+      expect(await usesNative(z.object({
+        title: z.string().nullable(),
+        status: z.enum(["open", "closed"]).nullable(),
+        amount: z.union([z.string(), z.number()]),
+        lines: z.array(z.object({ total: z.number().nullable() })),
+      }), {}, '{"title":null,"status":"open","amount":3,"lines":[{"total":null}]}')).toBe(true);
+    });
+
+    it("falls back for a union at the root and for unsupported branches", async () => {
+      expect(await usesNative(z.union([z.object({ a: z.string() }), z.object({ b: z.string() })]))).toBe(false);
+      expect(await usesNative(z.object({ value: z.union([z.object({ a: z.string().optional() }), z.null()]) }))).toBe(false);
+      expect(await usesNative(z.object({ value: z.looseObject({ name: z.string() }).nullable() }))).toBe(false);
+      expect(await usesNative(z.object({ tags: z.record(z.string(), z.string()).nullable() }))).toBe(false);
+      expect(await usesNative(z.object({ tags: z.record(z.string(), z.string()) }))).toBe(false);
+    });
+
+    it("needs every property required only for strict providers", async () => {
+      const optional = z.object({ title: z.string(), note: z.string().optional() });
+      expect(await usesNative(optional)).toBe(false);
+      expect(await usesNative(optional, { strictStructuredOutput: false }, '{"title":"x"}')).toBe(true);
+    });
+
+    it("marks vLLM guided decoding as not strict", () => {
+      expect(vllm("test").capabilities).toMatchObject({ structuredOutput: true, strictStructuredOutput: false });
+      expect(openai("test", { apiKey: "test" }).capabilities.strictStructuredOutput).toBeUndefined();
+    });
+  });
+
   it("uses native responseFormat and returns parsed output", async () => {
     let capturedRequest: ProviderRequest | undefined;
     const provider = mockProvider(
