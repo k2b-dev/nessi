@@ -21,3 +21,6 @@ export const parseJsonRecord = <T>(input: string): T | null => {
   const value = safeJsonParse<unknown>(input);
   return value && typeof value === "object" && !Array.isArray(value) ? value as T : null;
 };
+
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);

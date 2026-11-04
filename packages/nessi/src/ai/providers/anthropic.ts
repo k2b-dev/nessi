@@ -279,7 +279,7 @@ export const anthropic = (model: string, options?: AnthropicOptions): Provider =
 
       const payload = parseJsonRecord<AnthropicResponse>(await response.text());
       if (!payload) throw invalidResponseError("anthropic");
-      const envelope = errorEnvelope("anthropic", payload);
+      const envelope = errorEnvelope("anthropic", payload, (type) => RETRYABLE_STREAM_ERRORS.has(type));
       if (envelope) throw providerError(envelope);
       if (!Array.isArray(payload.content)) throw new ProviderError("anthropic returned no content.", { kind: "provider_error", retryable: true });
       const content: AssistantContentBlock[] = [];

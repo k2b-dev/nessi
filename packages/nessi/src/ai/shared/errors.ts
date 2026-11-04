@@ -202,7 +202,12 @@ export const malformedRecordError = (label: string) => ({
  * An error envelope inside an HTTP 200 body or stream: `{ error: {...} }`, `{ error: "..." }`, or
  * Mistral's `{ object: "error", message }`. Returns `undefined` for other records.
  */
-export const errorEnvelope = (label: string, record: Record<string, unknown>) => {
+export const errorEnvelope = (
+  label: string,
+  record: Record<string, unknown>,
+  /** Retryability of a string error code; unknown codes are retryable. */
+  retryableCode?: (code: string) => boolean,
+) => {
   const nested = record.error;
   const fields = typeof nested === "object" && nested !== null
     ? nested as Record<string, unknown>
@@ -217,7 +222,11 @@ export const errorEnvelope = (label: string, record: Record<string, unknown>) =>
   const contextOverflow = isContextOverflow(status ?? 400, message);
   return {
     error: `${label} error: ${message}${code ? ` (code: ${code})` : ""}`,
-    retryable: contextOverflow ? false : status !== undefined ? isRetryableStatus(status) : true,
+    retryable: contextOverflow
+      ? false
+      : status !== undefined
+        ? isRetryableStatus(status)
+        : code !== undefined && retryableCode ? retryableCode(code) : true,
     ...(status !== undefined ? { status } : {}),
     ...(code !== undefined ? { code } : {}),
     contextOverflow,

@@ -5,7 +5,7 @@ import {
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, isRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -281,8 +281,11 @@ export const mistral = (model: string, options?: MistralOptions): Provider => {
       if (!payload) throw invalidResponseError("mistral");
       const envelope = errorEnvelope("mistral", payload);
       if (envelope) throw providerError(envelope);
-      if (!payload.choices?.length) throw new ProviderError("mistral returned no choices.", { kind: "provider_error", retryable: true });
-      const choice = payload.choices[0];
+      const choice = payload.choices?.[0];
+      // An empty message is a valid answer; a choice with neither a message nor a finish reason is not.
+      if (!choice || (!isRecord(choice.message) && !choice.finish_reason)) {
+        throw new ProviderError("mistral returned no choices.", { kind: "provider_error", retryable: true });
+      }
       const idPrefix = fallbackToolCallPrefix("mistral");
       const toolCalls: ToolCallBlock[] = (choice?.message?.tool_calls ?? []).map((call, index) => ({
         type: "tool_call",

@@ -130,15 +130,34 @@ describe("stream records", () => {
 describe("success-shaped bodies without a result", () => {
   for (const [name, create, body] of [
     ["openai-compatible", cases[0]!.create, {}],
+    ["openai-compatible", cases[0]!.create, { choices: [{}] }],
     ["mistral", cases[1]!.create, { choices: [] }],
+    ["mistral", cases[1]!.create, { choices: [{ index: 0 }] }],
     ["gemini", cases[2]!.create, { candidates: [] }],
+    ["gemini", cases[2]!.create, { candidates: [{}] }],
     ["anthropic", cases[3]!.create, { id: "msg_1" }],
+    ["ollama", cases[4]!.create, {}],
+    ["ollama", cases[4]!.create, { done: true }],
   ] as const) {
-    it(`${name} complete() rejects a body without a result`, async () => {
+    it(`${name} complete() rejects ${JSON.stringify(body)}`, async () => {
       stubFetch(() => jsonResponse(body));
       await expect(create().complete(request)).rejects.toBeInstanceOf(ProviderError);
     });
   }
+
+  it("keeps empty answers and content-free stops", async () => {
+    stubFetch(() => jsonResponse({ choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "stop" }] }));
+    expect((await cases[0]!.create().complete(request)).finishReason).toBe("stop");
+    stubFetch(() => jsonResponse({ candidates: [{ finishReason: "SAFETY" }] }));
+    expect((await cases[2]!.create().complete(request)).finishReason).toBe("error");
+  });
+
+  it("anthropic complete() classifies error types like the stream", async () => {
+    for (const [type, retryable] of [["authentication_error", false], ["invalid_request_error", false], ["overloaded_error", true]] as const) {
+      stubFetch(() => jsonResponse({ type: "error", error: { type, message: "x" } }));
+      expect(await cases[3]!.create().complete(request).catch((caught: unknown) => caught)).toMatchObject({ retryable, code: type });
+    }
+  });
 
   it("gemini complete() reports a blocked prompt like the stream does", async () => {
     stubFetch(() => jsonResponse({ promptFeedback: { blockReason: "SAFETY" } }));

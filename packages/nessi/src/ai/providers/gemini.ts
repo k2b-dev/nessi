@@ -5,7 +5,7 @@ import {
   assertOnlySupportedFiles,
   buildAssistantMessageFromContent,
 } from "../shared/messages.js";
-import { parseJsonRecord, safeJsonParse } from "../shared/json.js";
+import { isRecord, parseJsonRecord, safeJsonParse } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -231,7 +231,11 @@ export const gemini = (model: string, options?: GeminiOptions): Provider => {
       // A blocked prompt has no candidates; the stream reports the same as a provider error.
       const blockReason = payload.promptFeedback?.blockReason;
       if (blockReason) throw new ProviderError(`gemini blocked the prompt (${blockReason}).`, { kind: "provider_error", retryable: false });
-      if (!payload.candidates?.length) throw new ProviderError("gemini returned no candidates.", { kind: "provider_error", retryable: true });
+      const first = payload.candidates?.[0];
+      // A safety stop may carry no content; a candidate with neither is not an answer.
+      if (!first || (!isRecord(first.content) && !first.finishReason)) {
+        throw new ProviderError("gemini returned no candidates.", { kind: "provider_error", retryable: true });
+      }
       const candidate = payload.candidates?.[0];
       const content: AssistantContentBlock[] = [];
       let toolCount = 0;

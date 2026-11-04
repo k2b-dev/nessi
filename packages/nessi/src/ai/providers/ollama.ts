@@ -1,10 +1,10 @@
 import { fallbackToolCallPrefix } from "../shared/tool-call-ids.js";
-import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeConnectionError, normalizeHttpError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
+import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeConnectionError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessage } from "../shared/messages.js";
 import { MalformedRecordError, parseNDJSON } from "../shared/ndjson.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
-import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, isRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
 import { toOllamaTools } from "../shared/tools.js";
 import { applyCredits, makeUsage } from "../shared/usage.js";
@@ -185,6 +185,7 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       if (!payload) throw invalidResponseError("ollama");
       const envelope = errorEnvelope("ollama", payload);
       if (envelope) throw providerError(envelope);
+      if (!isRecord(payload.message)) throw new ProviderError("ollama returned no message.", { kind: "provider_error", retryable: true });
       const usage = usageFromResponse(payload, options);
       const toolCalls = toolCallsFromResponse(payload);
       const finishReason = finishReasonFrom(payload, toolCalls.length > 0);

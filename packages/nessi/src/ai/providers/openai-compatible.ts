@@ -1,7 +1,7 @@
 import { buildRequest, errorEnvelope, invalidResponseError, malformedRecordError, normalizeHttpError, ProviderError, providerError, serializeRequest, streamEndedError } from "../shared/errors.js";
 import { fetchCompleteResponse } from "../shared/complete-response.js";
 import { assertOnlySupportedFiles, buildAssistantMessageFromContent } from "../shared/messages.js";
-import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
+import { ensureRecord, isRecord, parseJsonRecord, safeJsonParse, stringifyJson } from "../shared/json.js";
 import { resolveReasoning, withExtraBody } from "../shared/request-options.js";
 import { openSSEStream } from "../shared/stream-helpers.js";
 import { normalizeProviderStream } from "../shared/tool-stream-normalizer.js";
@@ -226,9 +226,11 @@ const parseCompletionResponse = async (response: Response, config: OpenAICompati
   // Some gateways answer HTTP 200 with an error body.
   const envelope = errorEnvelope(config.name, payload);
   if (envelope) throw providerError(envelope);
-  if (!payload.choices?.length) throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
-
-  const choice = payload.choices[0];
+  const choice = payload.choices?.[0];
+  // An empty message is a valid answer; a choice with neither a message nor a finish reason is not.
+  if (!choice || (!isRecord(choice.message) && !choice.finish_reason)) {
+    throw new ProviderError(`${config.name} returned no choices.`, { kind: "provider_error", retryable: true });
+  }
   const message = choice?.message;
   const thinking: AssistantContentBlock[] = [];
   if (config.compat?.thinkingFormat !== "none") {
