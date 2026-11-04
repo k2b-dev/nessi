@@ -171,10 +171,11 @@ Provider calls in the originating loop, including resumes with the same
 historical value instead. Stored messages, events, and loop aggregates remain
 full and inspectable. Returning `undefined` skips the historical representation.
 
-Derivation shares the tool's `timeoutMs` and stops when the loop is aborted. If
-it throws or does not finish in time, Nessi stores the full successful result,
-emits a non-fatal `tool_historical_result_error` issue, and continues the loop;
-the tool does not run again. Legacy messages
+Derivation shares the rest of the tool's `timeoutMs`, and Nessi stops waiting
+for it when the loop is aborted; the callback gets no signal and is not
+cancelled. If it throws or does not finish in time, Nessi stores the full
+successful result, emits a non-fatal `tool_historical_result_error` issue, and
+continues the loop; the tool does not run again. Legacy messages
 without `historicalResult` remain unchanged. `maxToolResultChars`, when set,
 runs after this selection as the final context-size boundary.
 

@@ -270,6 +270,20 @@ class LoopAbortedError extends Error {
   }
 }
 
+/** `parent`, also aborted after `ms` when given. */
+const deadlineAfter = (parent: AbortSignal, ms: number | undefined) => {
+  const timer = new AbortController();
+  const handle = ms === undefined ? undefined : setTimeout(() => timer.abort(), ms);
+  const linked = linkedAbortSignal([parent, timer.signal]);
+  return {
+    signal: linked.signal,
+    cleanup() {
+      clearTimeout(handle);
+      linked.cleanup();
+    },
+  };
+};
+
 const linkedAbortSignal = (signals: Array<AbortSignal | undefined>) => {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   const controller = new AbortController();
@@ -651,10 +665,14 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     return msg;
   };
 
-  /** Settles with `promise`, or rejects once `deadline` aborts. */
+  const deadlineError = () => new Error(signal.aborted ? "the loop was aborted" : "the tool deadline passed");
+
+  /**
+   * Settles with `promise`, or rejects once `deadline` aborts. The callback behind `promise`
+   * gets no signal, so it may keep running; the loop just stops waiting for it.
+   */
   const untilAborted = <T>(promise: Promise<T>, deadline: AbortSignal) => new Promise<T>((resolve, reject) => {
-    const stop = () => reject(new Error(signal.aborted ? "the loop was aborted" : "the tool deadline passed"));
-    if (deadline.aborted) return stop();
+    const stop = () => reject(deadlineError());
     deadline.addEventListener("abort", stop, { once: true });
     promise.then(resolve, reject).finally(() => deadline.removeEventListener("abort", stop));
   });
@@ -673,6 +691,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     let historicalResult: ToolResultMessage["historicalResult"];
     try {
       const projection = tool.def.toHistoricalResult;
+      if (projection && deadline.aborted) throw deadlineError();
       const value = projection
         ? await untilAborted(Promise.resolve().then(() => projection({ input, output, callId: call.id })), deadline)
         : undefined;
@@ -768,6 +787,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     const timeoutIssue = () => toolTimeoutIssue(tc, timeoutMs ?? 0);
 
     if (tool.kind === "client") {
+      const clientStartedAt = nowMs();
       const matchesToolResult = (event: InboundEvent): event is Extract<InboundEvent, { type: "tool_result" }> =>
         event.type === "tool_result" && event.callId === tc.id;
       let actionWaitStartedAt: number | undefined;
@@ -816,7 +836,14 @@ export const nessi = (options: NessiOptions): NessiLoop => {
         }
       }
 
-      const historicalIssue = await appendSuccessfulToolResult(tool, tc, validatedInput, output, signal);
+      // The projection gets what is left of the client tool's timeout.
+      const deadline = deadlineAfter(signal, timeoutMs ? Math.max(0, timeoutMs - (nowMs() - clientStartedAt)) : undefined);
+      let historicalIssue: NessiIssue | undefined;
+      try {
+        historicalIssue = await appendSuccessfulToolResult(tool, tc, validatedInput, output, deadline.signal);
+      } finally {
+        deadline.cleanup();
+      }
       updateAggregateToolCall(tc.id, { result: output });
       if (historicalIssue) {
         recordIssue(historicalIssue, turnIssues);

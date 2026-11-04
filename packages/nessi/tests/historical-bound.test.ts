@@ -62,13 +62,70 @@ describe("historical result projection", () => {
 
   it("ends promptly when the loop is aborted during the projection", async () => {
     const store = memoryStore();
-    const loop = nessi({ provider: provider(), store, systemPrompt: "test", input: "Report", tools: [stuckReport()] });
-    const events = await bounded(run(loop, (event) => {
-      if (event.type === "tool_execution_start") setTimeout(() => loop.abort(), 10);
+    let loop: ReturnType<typeof nessi> | undefined;
+    let executions = 0;
+    const report = defineTool({
+      name: "report",
+      description: "Report",
+      inputSchema: z.object({}),
+      toHistoricalResult: () => {
+        loop?.abort();
+        return new Promise<never>(() => {});
+      },
+    }).server(async () => {
+      executions++;
+      return { rows: 3 };
+    });
+    loop = nessi({ provider: provider(), store, systemPrompt: "test", input: "Report", tools: [report] });
+    const events = await bounded(run(loop));
+    expect(executions).toBe(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "issue",
+      issue: expect.objectContaining({ kind: "tool_historical_result_error", message: expect.stringContaining("loop was aborted") }),
     }));
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "aborted" });
     const stored = (await store.load()).find(({ message }) => message.role === "tool_result")?.message;
     expect(stored).toMatchObject({ result: { rows: 3 } });
+  });
+
+  it("bounds a client tool projection by the rest of its timeout", async () => {
+    const store = memoryStore();
+    const report = defineTool({
+      name: "report",
+      description: "Report",
+      inputSchema: z.object({}),
+      timeoutMs: 30,
+      toHistoricalResult: () => new Promise<never>(() => {}),
+    }).client(() => ({ rows: 3 }));
+    const loop = nessi({ provider: provider(), store, systemPrompt: "test", input: "Report", tools: [report] });
+    const events = await bounded(run(loop, (event) => {
+      if (event.type === "tool_action_request") loop.push({ type: "tool_result", callId: event.callId, result: { rows: 3 } });
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "issue",
+      issue: expect.objectContaining({ kind: "tool_historical_result_error", message: expect.stringContaining("deadline") }),
+    }));
+    expect((await store.load()).find(({ message }) => message.role === "tool_result")?.message).toMatchObject({ result: { rows: 3 } });
+  });
+
+  it("skips the projection when the loop is already aborted", async () => {
+    let loop: ReturnType<typeof nessi> | undefined;
+    let projected = false;
+    const report = defineTool({
+      name: "report",
+      description: "Report",
+      inputSchema: z.object({}),
+      toHistoricalResult: () => {
+        projected = true;
+        throw new Error("must not run");
+      },
+    }).server(async () => {
+      loop?.abort();
+      return { rows: 3 };
+    });
+    loop = nessi({ provider: provider(), store: memoryStore(), systemPrompt: "test", input: "Report", tools: [report] });
+    await bounded(run(loop));
+    expect(projected).toBe(false);
   });
 
   it("still stores a projection that finishes in time", async () => {
