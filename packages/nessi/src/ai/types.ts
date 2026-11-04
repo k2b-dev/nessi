@@ -113,7 +113,10 @@ export type ProviderIssue = {
   retryable: boolean;
   /** HTTP status of a rejected request. */
   status?: number;
-  /** Provider error code from the body, or the runtime's connection error code. */
+  /**
+   * Provider error code from the body, the runtime's connection error code, or `invalid_request`
+   * when nessi could not build the request and sent nothing.
+   */
   code?: string;
   /** How long the provider asked the caller to wait (`retry-after-ms` or `retry-after`). */
   retryAfterMs?: number;
@@ -285,12 +288,10 @@ export type RawStreamEvent =
   };
 
 export type ProviderTimeouts = {
-  /** Streaming only: request start through the first response-body chunk. */
+  /** Request start through the first response-body chunk, which may precede the first token. */
   firstByteMs?: number;
-  /** Each body-read gap; native complete() starts this timer after response headers. */
+  /** Each gap between body chunks after the first. */
   idleMs?: number;
-  /** Native complete() only: request start through the entire response body. */
-  totalMs?: number;
 };
 
 export type Provider = {
@@ -299,8 +300,8 @@ export type Provider = {
   model: string;
   contextWindow?: number;
   capabilities: ProviderCapabilities;
+  /** The only request path. `complete(provider, request)` collects a stream into one result. */
   stream(request: GenerateRequest): AsyncIterable<StreamEvent>;
-  complete(request: GenerateRequest): Promise<GenerateResult>;
 };
 
 export type OpenAICompat = {

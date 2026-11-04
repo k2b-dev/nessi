@@ -181,11 +181,11 @@ export type ProviderErrorDetails = {
   contextOverflow?: boolean;
   overflowRatio?: number;
   /** The deadline that ended the request, when `kind` is `timeout`. */
-  scope?: "provider_first_byte" | "provider_idle" | "provider_total";
+  scope?: "provider_first_byte" | "provider_idle";
 };
 
 /**
- * A failed provider request from `complete()` or `completeFromStream()`. It carries what a caller
+ * A failed provider request from `complete()`. It carries what a caller
  * needs to decide on a retry; nessi itself never retries. Caller aborts throw the signal's reason.
  */
 export class ProviderError extends Error implements ProviderErrorDetails {
@@ -212,11 +212,6 @@ export class ProviderError extends Error implements ProviderErrorDetails {
   }
 }
 
-/** Throwable form of `normalizeHttpError()` or `normalizeConnectionError()`. */
-export const providerError = (
-  { error, ...details }: { error: string } & Omit<ProviderErrorDetails, "kind">,
-  options?: { cause?: unknown },
-) => new ProviderError(error, { kind: "provider_error", ...details }, options);
 
 /** A request nessi cannot build, such as an unsupported file type; retrying cannot help. */
 export const invalidRequestError = (message: string, options?: { cause?: unknown }) =>
@@ -241,8 +236,6 @@ export const serializeRequest = (label: string, body: unknown) => {
   }
 };
 
-export const invalidResponseError = (label: string) =>
-  new ProviderError(`${label} returned invalid JSON.`, { kind: "provider_error", retryable: true });
 
 /** A stream record that is not a JSON object; content it carried would otherwise vanish. */
 export const malformedRecordError = (label: string) => ({

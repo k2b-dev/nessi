@@ -20,7 +20,8 @@ import type {
   StructuredResult,
   UserMessage,
 } from "./types.js";
-import type { GenerateResult } from "./ai/index.js";
+import { complete } from "./ai/complete.js";
+import type { GenerateRequest, GenerateResult } from "./ai/index.js";
 
 const DEFAULT_SYSTEM_PROMPT = "You produce schema-valid structured data for the caller.";
 
@@ -298,14 +299,14 @@ const directStructured = async <TOutput extends z.ZodType>(
   // Every failure reports the attempts that already ran, so their usage is not lost.
   const failure = (message: string, code: StructuredOutputErrorCode, details?: Record<string, unknown>) =>
     new StructuredOutputError(message, code, { ...details, attempts: attempts.length, aggregate: aggregateOfAttempts() });
-  const completeWithTiming = async (request: Parameters<typeof options.provider.complete>[0]) => {
+  const completeWithTiming = async (request: GenerateRequest) => {
     const requestStartedAt = Date.now();
     let result: GenerateResult;
     try {
-      result = await options.provider.complete(request);
+      result = await complete(options.provider, request);
     } catch (error) {
       generationMs += Math.max(0, Date.now() - requestStartedAt);
-      // Match the tool-loop mode, which reports provider failures as StructuredOutputError.
+      // Provider failures surface as StructuredOutputError with the ProviderError as cause.
       const code = options.signal?.aborted ? "aborted" : "loop_failed";
       throw failure(toErrorMessage(error), code, { cause: error });
     }

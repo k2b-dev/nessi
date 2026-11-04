@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { complete } from "../../../src/ai/index.js";
 import { endpoint } from "../helpers/endpoints.js";
-import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
+import { completionStream, fixtureJson, fixtureText, stubFetch, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -10,10 +11,10 @@ afterEach(() => {
 
 describe("openAICompatible with the Mistral settings", () => {
   it("supports complete", async () => {
-    stubFetch(async () => jsonResponse(await fixtureJson("../fixtures/mistral/complete.json")));
+    stubFetch(async () => completionStream(await fixtureJson("../fixtures/mistral/complete.json")));
 
     const provider = endpoint("mistral", { model: "mistral-small-latest" });
-    const result = await provider.complete({ messages: [] });
+    const result = await complete(provider, { messages: [] });
     expect(result.finishReason).toBe("tool_use");
     expect(result.message.content.some((block) => block.type === "tool_call")).toBe(true);
   });
@@ -22,11 +23,11 @@ describe("openAICompatible with the Mistral settings", () => {
     let capturedBody: any;
     stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
-      return jsonResponse(await fixtureJson("../fixtures/mistral/complete.json"));
+      return completionStream(await fixtureJson("../fixtures/mistral/complete.json"));
     });
 
     const provider = endpoint("mistral", { model: "mistral-small-latest", temperature: 0.8 });
-    await provider.complete({ messages: [], temperature: 0 });
+    await complete(provider, { messages: [], temperature: 0 });
 
     expect(capturedBody.temperature).toBe(0);
   });
@@ -35,12 +36,12 @@ describe("openAICompatible with the Mistral settings", () => {
     let capturedBody: any;
     stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
-      return jsonResponse(await fixtureJson("../fixtures/mistral/complete.json"));
+      return completionStream(await fixtureJson("../fixtures/mistral/complete.json"));
     });
 
     const schema = { type: "object", properties: { title: { type: "string" } }, required: ["title"] };
     const provider = endpoint("mistral", { model: "mistral-small-latest" });
-    await provider.complete({
+    await complete(provider, {
       messages: [],
       responseFormat: { type: "json_schema", name: "card", schema },
     });

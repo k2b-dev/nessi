@@ -78,7 +78,7 @@ loop; the stored full result remains authoritative.
 `complete()` returns a final assistant message, usage, finish reason, and provider metadata.
 
 ```ts
-const result = await provider.complete({ messages });
+const result = await complete(provider, { messages });
 
 if (result.finishReason === "tool_use") {
   // Inspect result.message.content for tool_call blocks.
@@ -269,7 +269,7 @@ Pass an `AbortSignal` to cancel a request:
 ```ts
 const controller = new AbortController();
 
-const result = await provider.complete({
+const result = await complete(provider, {
   messages,
   signal: controller.signal,
   maxOutputTokens: 256,

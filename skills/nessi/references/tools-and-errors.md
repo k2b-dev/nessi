@@ -84,7 +84,7 @@ const messages: Message[] = [
   },
 ];
 
-const first = await provider.complete({ messages, tools });
+const first = await complete(provider, { messages, tools });
 
 const toolCalls = first.message.content.filter((block) => block.type === "tool_call");
 
@@ -102,7 +102,7 @@ for (const call of toolCalls) {
   });
 }
 
-const final = await provider.complete({ messages, tools });
+const final = await complete(provider, { messages, tools });
 ```
 
 If there can be multiple tool calls, append the assistant message once, then append all matching tool results.
@@ -251,8 +251,8 @@ for await (const event of provider.stream({ messages })) {
 A stream record that is not a JSON object, or an error record inside the
 stream (`{ error: … }`, Mistral's `{ object: "error" }`, a proxy's
 `{ type: "error" }`), ends the stream with a `provider_error` issue, even when a
-normal end follows. Native `complete()` rejects HTTP 200 bodies that carry an
-error or no result. An OpenAI `refusal` arrives as text and ends the response
+normal end follows. A stream request answered with an HTTP 200 JSON body is
+read as an error envelope. An OpenAI `refusal` arrives as text and ends the response
 with stop reason `error`, like a content filter.
 
 Malformed tool streams are not provider connection errors. Handle them separately
@@ -267,9 +267,9 @@ if (
 }
 ```
 
-`complete()` and `completeFromStream()` throw a `ProviderError` on connection
-errors, non-OK HTTP responses, invalid provider JSON, and configured provider
-timeouts. Caller cancellation throws the signal's reason instead. Nessi never
+`complete(provider, request)` throws a `ProviderError` on connection errors,
+non-OK HTTP responses, malformed or in-band error records, and configured
+provider timeouts. Caller cancellation throws the signal's reason instead. Nessi never
 retries; the error carries what a retry policy needs:
 
 | Field | Meaning |
@@ -280,13 +280,13 @@ retries; the error carries what a retry policy needs:
 | `code` | Provider error code from the body, or the runtime code of a failed connection (`ECONNREFUSED`) |
 | `retryAfterMs` | Wait the provider asked for (`retry-after-ms`, then `retry-after`) |
 | `contextOverflow`, `overflowRatio` | The request exceeded the context window |
-| `scope` | `"provider_first_byte"`, `"provider_idle"`, or `"provider_total"` for timeouts |
+| `scope` | `"provider_first_byte"` or `"provider_idle"` for timeouts |
 
 ```ts
-import { ProviderError } from "@k2b/nessi/ai";
+import { complete, ProviderError } from "@k2b/nessi/ai";
 
 try {
-  return await provider.complete({ messages, signal });
+  return await complete(provider, { messages, signal });
 } catch (error) {
   if (error instanceof ProviderError && error.retryable) {
     await sleep(error.retryAfterMs ?? backoffMs);
@@ -305,7 +305,7 @@ Streaming `provider_error` issues carry the same `status`, `code`, and
 Context overflow can appear as:
 
 - `event.type === "issue"` with `issue.kind === "provider_error"` and `contextOverflow: true` in streaming
-- a thrown `ProviderError` with `contextOverflow: true` from `complete()` or `completeFromStream()`
+- a thrown `ProviderError` with `contextOverflow: true` from `complete()`
 
 Recommended application behavior:
 

@@ -1,4 +1,5 @@
-import { normalizeConnectionError, normalizeHttpError, serializeRequest } from "./errors.js";
+import { errorEnvelope, normalizeConnectionError, normalizeHttpError, readErrorBody, serializeRequest } from "./errors.js";
+import { parseJsonRecord } from "./json.js";
 import { parseSSE, SSETimeoutError } from "./sse.js";
 import type { SSEEvent } from "./sse.js";
 import type { ProviderTimeouts, RawStreamEvent } from "../types.js";
@@ -33,6 +34,8 @@ export const openSSEStream = async (
   contextWindow?: number,
   timeouts?: ProviderTimeouts,
 ): Promise<SSEStreamResult> => {
+  // An already aborted caller sends nothing; the stream reports the abort with the caller's reason.
+  signal?.throwIfAborted();
   const serializedBody = serializeRequest(label, body);
   let response: Response;
   const controller = new AbortController();
@@ -114,6 +117,20 @@ export const openSSEStream = async (
     const normalized = await normalizeHttpError(label, response, undefined, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
     cleanupExternalAbort();
     return { ok: false, error: { type: "error", ...normalized } };
+  }
+
+  // Some gateways answer a stream request with a plain JSON body, usually an error envelope.
+  if (response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    const text = await readErrorBody(response, { idleMs: timeouts?.idleMs, deadlineAt: firstByteDeadline });
+    cleanupExternalAbort();
+    const record = parseJsonRecord<Record<string, unknown>>(text);
+    const envelope = record ? errorEnvelope(label, record) : undefined;
+    return {
+      ok: false,
+      error: envelope
+        ? { type: "error", ...envelope }
+        : { type: "error", error: `${label} answered a stream request with a JSON body instead of a stream.`, retryable: true },
+    };
   }
 
   const reader = response.body?.getReader();

@@ -374,11 +374,16 @@ export async function* normalizeProviderStream(
       });
       return;
     }
+    // A request nessi could not build fails the same way on every attempt; keep that visible.
+    const code = error instanceof ProviderError
+      ? (error.kind === "invalid_request" ? "invalid_request" : error.code)
+      : undefined;
     yield* emitIssue({
       kind: "provider_error",
       message: error instanceof Error ? error.message : String(error),
-      // A request nessi could not build fails the same way on every attempt.
       retryable: error instanceof ProviderError ? error.retryable : true,
+      ...(code !== undefined ? { code } : {}),
+      ...(error instanceof ProviderError && error.status !== undefined ? { status: error.status } : {}),
     });
     return;
   }

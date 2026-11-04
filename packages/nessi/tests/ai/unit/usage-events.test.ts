@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openAICompatible } from "../../../src/ai/index.js";
+import { complete, openAICompatible } from "../../../src/ai/index.js";
 import type { RawStreamEvent, StreamEvent } from "../../../src/ai/types.js";
 import { normalizeProviderStream } from "../../../src/ai/shared/tool-stream-normalizer.js";
 import { mergeUsage } from "../../../src/aggregates.js";
-import { jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
+import { completionStream, stubFetch, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -63,8 +63,8 @@ describe("cache usage", () => {
   const cachedUsage = { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 80 } };
 
   it("reads OpenAI cached prompt tokens as a part of input", async () => {
-    stubFetch(() => jsonResponse({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }], usage: cachedUsage }));
-    expect((await openai().complete(request)).usage).toEqual({ input: 100, output: 5, total: 105, cacheRead: 80 });
+    stubFetch(() => completionStream({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }], usage: cachedUsage }));
+    expect((await complete(openai(), request)).usage).toEqual({ input: 100, output: 5, total: 105, cacheRead: 80 });
 
     stubFetch(() => textResponse(sse(
       [undefined, { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }],

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { completeFromStream, openAICompatible } from "../../../src/ai/index.js";
+import { complete, openAICompatible } from "../../../src/ai/index.js";
 import { endpoint } from "../helpers/endpoints.js";
 import { expectProviderContract } from "../contracts/provider-contract.js";
-import { fixtureJson, fixtureText, jsonResponse, textResponse, stubFetch } from "../helpers/fixtures.js";
+import { completionStream, fixtureJson, fixtureText, stubFetch, textResponse } from "../helpers/fixtures.js";
 import type { OpenAICompat } from "../../../src/ai/types.js";
 
 const originalFetch = globalThis.fetch;
@@ -132,7 +132,7 @@ describe("openAICompatible provider", () => {
     let call = 0;
     stubFetch(async () => {
       call++;
-      if (call === 1) return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
+      if (call === 1) return completionStream(await fixtureJson("../fixtures/openai/complete.json"));
       return textResponse(await fixtureText("../fixtures/openai/stream.sse"), "text/event-stream");
     });
 
@@ -219,7 +219,7 @@ describe("openAICompatible provider", () => {
     let capturedBody: any;
     stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
-      return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
+      return completionStream(await fixtureJson("../fixtures/openai/complete.json"));
     });
 
     const provider = openAICompatible({
@@ -230,7 +230,7 @@ describe("openAICompatible provider", () => {
       compat: { supportsUsageInStreaming: true, thinkingFormat: "none" },
     });
 
-    await provider.complete({ messages: [], temperature: 0 });
+    await complete(provider, { messages: [], temperature: 0 });
     expect(capturedBody.temperature).toBe(0);
   });
 
@@ -238,7 +238,7 @@ describe("openAICompatible provider", () => {
     let capturedBody: any;
     stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
-      return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
+      return completionStream(await fixtureJson("../fixtures/openai/complete.json"));
     });
 
     const provider = openAICompatible({
@@ -248,7 +248,7 @@ describe("openAICompatible provider", () => {
       compat: { supportsUsageInStreaming: true, thinkingFormat: "none" },
     });
 
-    await provider.complete({
+    await complete(provider, {
       messages: [],
       responseFormat: {
         type: "json_schema",
@@ -271,12 +271,12 @@ describe("openAICompatible provider", () => {
     let capturedBody: any;
     stubFetch(async (_input, init) => {
       capturedBody = JSON.parse(String(init?.body ?? "{}"));
-      return jsonResponse(await fixtureJson("../fixtures/openai/complete.json"));
+      return completionStream(await fixtureJson("../fixtures/openai/complete.json"));
     });
 
     const provider = endpoint("vllm", { model: "qwen-test", baseURL: "https://example.com/v1" });
     const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
-    await provider.complete({
+    await complete(provider, {
       messages: [],
       responseFormat: { type: "json_schema", name: "result", schema },
     });
@@ -312,7 +312,7 @@ describe("openAICompatible provider", () => {
     stubFetch(async () =>
       textResponse(await fixtureText("../fixtures/openai/truncated.sse"), "text/event-stream"));
     const provider = openAICompatible({ name: "custom", model: "gpt-test", baseURL: "https://example.com/v1" });
-    await expect(completeFromStream(provider, { messages: [] })).rejects.toThrow("stream ended unexpectedly");
+    await expect(complete(provider, { messages: [] })).rejects.toThrow("stream ended unexpectedly");
   });
 
   it("reports an in-stream error chunk with its message", async () => {
@@ -359,17 +359,15 @@ describe("typed reasoning chunks", () => {
 
   it("emits one reasoning block when a frame carries the same reasoning twice", async () => {
     const provider = endpoint("vllm", { baseURL: "https://example.test" });
-    stubFetch(() => jsonResponse(chunked));
-    expect((await provider.complete({ messages: [] })).message.content).toEqual([{ type: "thinking", thinking: "Plan.", signature: "s" }, { type: "text", text: "Hi" }]);
     stubFetch(() => textResponse(chunkedStream, "text/event-stream"));
-    expect((await completeFromStream(provider, { messages: [] })).message.content).toEqual([{ type: "thinking", thinking: "Plan.", signature: "s" }, { type: "text", text: "Hi" }]);
+    expect((await complete(provider, { messages: [] })).message.content).toEqual([{ type: "thinking", thinking: "Plan.", signature: "s" }, { type: "text", text: "Hi" }]);
   });
 
   it("hides typed reasoning chunks with thinkingFormat none", async () => {
     const provider = endpoint("openai", { baseURL: "https://example.test" });
-    stubFetch(() => jsonResponse(chunked));
-    expect((await provider.complete({ messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
+    stubFetch(() => completionStream(chunked));
+    expect((await complete(provider, { messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
     stubFetch(() => textResponse(chunkedStream, "text/event-stream"));
-    expect((await completeFromStream(provider, { messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
+    expect((await complete(provider, { messages: [] })).message.content).toEqual([{ type: "text", text: "Hi" }]);
   });
 });

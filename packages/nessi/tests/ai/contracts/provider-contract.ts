@@ -1,5 +1,5 @@
 import { expect } from "bun:test";
-import { completeFromStream } from "../../../src/ai/index.js";
+import { complete } from "../../../src/ai/index.js";
 import type { AssistantContentBlock, GenerateRequest, Provider, StreamEvent } from "../../../src/ai/types.js";
 
 export async function collectStream(provider: Provider, request: GenerateRequest): Promise<StreamEvent[]> {
@@ -24,23 +24,24 @@ const comparable = (blocks: AssistantContentBlock[]) => blocks.filter((block) =>
 });
 
 /**
- * `complete()` and the stream must describe the same answer: blocks in order (text, reasoning
- * with its signature, tool calls with id, name, and arguments), finish reason, and usage. The
- * fetch stub must answer the first request with the native body and later ones with the stream.
+ * `complete()` must describe exactly the answer the stream emitted: blocks in order (text,
+ * reasoning with its signature, tool calls with id, name, and arguments), replay `details`,
+ * finish reason, and usage, with no issue on the way. The fetch stub answers every request.
  */
 export async function expectProviderContract(provider: Provider, request: GenerateRequest) {
-  const result = await provider.complete(request);
   const events = await collectStream(provider, request);
-  const streamed = await completeFromStream(provider, request);
+  const result = await complete(provider, request);
 
   expect(events.some((event) => event.type === "issue")).toBe(false);
-  expect(comparable(streamed.message.content)).toEqual(comparable(result.message.content));
-  expect(details(streamed.message.content)).toEqual(details(result.message.content));
-  expect(streamed.finishReason).toBe(result.finishReason);
-  expect(streamed.usage).toEqual(result.usage);
-
   const streamedBlocks = events.flatMap((event) => (event.type === "block_end" ? [event.block] : []));
-  expect(comparable(streamedBlocks)).toEqual(comparable(result.message.content));
+  expect(comparable(result.message.content)).toEqual(comparable(streamedBlocks));
+  expect(details(result.message.content)).toEqual(details(streamedBlocks));
+  const final = events.at(-1);
+  expect(final?.type).toBe("usage");
+  if (final?.type === "usage") {
+    expect(result.finishReason).toBe(final.finishReason ?? "stop");
+    expect(result.usage).toEqual(final.usage);
+  }
   return result;
 }
 

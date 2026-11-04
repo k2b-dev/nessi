@@ -1,5 +1,4 @@
 import { describe, it, expect } from "bun:test";
-import { completeFromStream } from "../src/ai/index.js";
 import { z } from "zod";
 import { nessi } from "../src/nessi.js";
 import { defineTool } from "../src/tools.js";
@@ -620,9 +619,6 @@ describe("nessi core loop", () => {
             block: { type: "text", text: "Done." },
           });
           yield timedEvent(100, { type: "usage", usage: { input: 20, output: 10, total: 30 } });
-        },
-        complete(request) {
-          return completeFromStream(provider, request);
         },
       };
 
@@ -1468,9 +1464,6 @@ describe("nessi core loop", () => {
         yield { type: "block_end" as const, blockId: "b0", index: 0, block: { type: "text" as const, text: "After compaction" } };
         yield { type: "usage" as const, usage: { input: 10, output: 5, total: 15 } };
       },
-      complete(request) {
-        return completeFromStream(provider, request);
-      },
     };
 
     const events = await collectEvents(
@@ -1533,9 +1526,6 @@ describe("nessi core loop", () => {
           issue: { kind: "provider_error" as const, message: "context too long", retryable: false, contextOverflow: true },
         };
       },
-      complete(request) {
-        return completeFromStream(provider, request);
-      },
     };
 
     const events = await collectEvents(
@@ -1580,9 +1570,6 @@ describe("nessi core loop", () => {
           type: "issue" as const,
           issue: { kind: "provider_error" as const, message: "context too long", retryable: false, contextOverflow: true },
         };
-      },
-      complete(request) {
-        return completeFromStream(provider, request);
       },
     };
 
@@ -2218,9 +2205,6 @@ describe("nessi core loop", () => {
         yield { type: "block_delta" as const, blockId: "b0", delta: "After compaction" };
         yield { type: "block_end" as const, blockId: "b0", index: 0, block: { type: "text" as const, text: "After compaction" } };
         yield { type: "usage" as const, usage: { input: 10, output: 5, total: 15 } };
-      },
-      complete(request) {
-        return completeFromStream(provider, request);
       },
     };
 

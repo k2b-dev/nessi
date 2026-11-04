@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { completeFromStream, openAICompatible, ProviderError } from "../../../src/ai/index.js";
+import { complete, openAICompatible, ProviderError } from "../../../src/ai/index.js";
 import { endpoint, ENDPOINT_NAMES } from "../helpers/endpoints.js";
 import type { Provider } from "../../../src/ai/types.js";
 import { parseRetryAfterMs } from "../../../src/ai/shared/errors.js";
@@ -37,8 +37,8 @@ const overflow = () => new Response(
 describe("ProviderError", () => {
   for (const { name, create } of providers) {
     for (const [mode, run] of [
-      ["complete()", (provider: Provider, signal?: AbortSignal) => provider.complete({ ...request, signal })],
-      ["completeFromStream()", (provider: Provider, signal?: AbortSignal) => completeFromStream(provider, { ...request, signal })],
+      ["complete()", (provider: Provider, signal?: AbortSignal) => complete(provider, { ...request, signal })],
+      ["complete()", (provider: Provider, signal?: AbortSignal) => complete(provider, { ...request, signal })],
     ] as const) {
       it(`${name} ${mode} keeps status, code, and Retry-After of a rejected request`, async () => {
         stubFetch(rateLimited);
@@ -104,7 +104,7 @@ describe("ProviderError", () => {
     }
   }
 
-  it("completeFromStream() reports a stream deadline as a timeout, also when fetch rejects on abort", async () => {
+  it("complete() reports a stream deadline as a timeout, also when fetch rejects on abort", async () => {
     // Like a real fetch, reject in the same tick as the abort.
     globalThis.fetch = Object.assign((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
@@ -113,19 +113,12 @@ describe("ProviderError", () => {
       openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
       endpoint("mistral", { baseURL: "https://example.test", timeouts: { firstByteMs: 5 } }),
     ]) {
-      const error = await rejection(completeFromStream(provider, request));
+      const error = await rejection(complete(provider, request));
       expect(error).toBeInstanceOf(ProviderError);
       expect(error).toMatchObject({ kind: "timeout", retryable: true, scope: "provider_first_byte" });
     }
   });
 
-  it("complete() reports a response deadline as a timeout", async () => {
-    stubFetch(() => new Promise<Response>(() => {}));
-    const provider = openAICompatible({ name: "test", model: "test", baseURL: "https://example.test", timeouts: { totalMs: 5 } });
-    const error = await rejection(provider.complete(request));
-    expect(error).toBeInstanceOf(ProviderError);
-    expect(error).toMatchObject({ kind: "timeout", retryable: true, scope: "provider_total" });
-  });
 });
 
 describe("parseRetryAfterMs", () => {
@@ -158,14 +151,12 @@ describe("requests nessi cannot build", () => {
       it(`${name} fails ${label} as not retryable without sending it`, async () => {
         let sent = 0;
         stubFetch(() => { sent++; return new Response("{}"); });
-        const native = await rejection(create().complete(input));
-        expect(native).toBeInstanceOf(ProviderError);
-        expect(native).toMatchObject({ kind: "invalid_request", retryable: false });
-        // The stream path reports it as a provider_error issue; retryable is the contract.
-        expect(await rejection(completeFromStream(create(), input))).toMatchObject({ kind: "provider_error", retryable: false });
+        const error = await rejection(complete(create(), input));
+        expect(error).toBeInstanceOf(ProviderError);
+        expect(error).toMatchObject({ kind: "invalid_request", retryable: false, code: "invalid_request" });
         const issues = [];
         for await (const event of create().stream(input)) if (event.type === "issue") issues.push(event.issue);
-        expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false })]);
+        expect(issues).toEqual([expect.objectContaining({ kind: "provider_error", retryable: false, code: "invalid_request" })]);
         expect(sent).toBe(0);
       });
     }

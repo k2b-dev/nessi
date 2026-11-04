@@ -11,7 +11,7 @@ The provider layer gives applications a common `Provider` interface with:
 
 The provider layer does not run an agent loop, persist messages, or execute tools.
 For schema-valid typed task results, prefer `nessi.structured()` from the root
-package over hand-parsing `provider.complete()` text.
+package over hand-parsing `complete(provider, request)` text.
 
 ## Install and import
 
@@ -24,7 +24,7 @@ bun add @k2b/nessi
 Import providers from the `/ai` subpath:
 
 ```ts
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 ```
 
 Import agent-loop helpers from the package root:
@@ -54,7 +54,7 @@ const provider = openAICompatible({
 
 ```ts
 import { nessi, defineTool, memoryStore } from "@k2b/nessi";
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const searchDocs = defineTool({
@@ -170,7 +170,7 @@ Use `nessi.structured()` when the app needs a typed object validated by Zod:
 
 ```ts
 import { nessi } from "@k2b/nessi";
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 import { z } from "zod";
 
 const result = await nessi.structured({
@@ -213,7 +213,7 @@ the full `nessi()` loop for tool work.
 ## One-shot completion
 
 ```ts
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 
 const provider = openAICompatible({
   name: "openrouter",
@@ -223,7 +223,7 @@ const provider = openAICompatible({
   temperature: 0.2,
 });
 
-const result = await provider.complete({
+const result = await complete(provider, {
   systemPrompt: "You write compact technical summaries.",
   messages: [
     {
@@ -246,7 +246,7 @@ console.log(result.usage);
 ## Streaming text
 
 ```ts
-import { openAICompatible } from "@k2b/nessi/ai";
+import { complete, openAICompatible } from "@k2b/nessi/ai";
 
 const provider = openAICompatible({
   name: "ollama",
@@ -285,7 +285,7 @@ for await (const event of provider.stream({ messages })) {
 ## Minimal provider switcher
 
 ```ts
-import { openAICompatible, type Provider } from "@k2b/nessi/ai";
+import { complete, openAICompatible, type Provider } from "@k2b/nessi/ai";
 
 function createProvider(name: "local" | "hosted"): Provider {
   if (name === "local") {

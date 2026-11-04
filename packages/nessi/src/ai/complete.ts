@@ -9,7 +9,11 @@ import type {
 import { ProviderError } from "./shared/errors.js";
 import { appendAssistantContentBlock, buildAssistantMessageFromContent } from "./shared/messages.js";
 
-export const completeFromStream = async (
+/**
+ * One request as a single result: the provider's stream, collected. Failures throw a
+ * `ProviderError`; a caller abort throws the signal's reason.
+ */
+export const complete = async (
   /** `name`, when given, is recorded as the message's producer. */
   provider: Pick<Provider, "model" | "stream"> & { name?: string },
   request: GenerateRequest,
@@ -38,7 +42,8 @@ export const completeFromStream = async (
         if (issue.kind === "provider_error") {
           request.signal?.throwIfAborted();
           const { kind, message, ...details } = issue;
-          throw new ProviderError(message, { kind, ...details });
+          // A request nessi could not build keeps that kind; it was never sent.
+          throw new ProviderError(message, { kind: details.code === "invalid_request" ? "invalid_request" : kind, ...details });
         }
         break;
       }

@@ -2,9 +2,8 @@
 // Mock Provider for deterministic testing
 // ============================================================================
 
-import { completeFromStream } from "../src/ai/index.js";
 import { normalizeProviderStream } from "../src/ai/shared/tool-stream-normalizer.js";
-import type { RawStreamEvent } from "../src/ai/types.js";
+import type { GenerateResult, RawStreamEvent, StreamEvent } from "../src/ai/types.js";
 import type { Provider, ProviderEvent, ProviderRequest } from "../src/types.js";
 
 type MockProviderEvent = ProviderEvent | RawStreamEvent;
@@ -62,9 +61,6 @@ export function mockProvider(
       options?.onRequest?.(request);
       yield* streamMockEvents(events);
     },
-    complete(request: ProviderRequest) {
-      return completeFromStream(provider, request);
-    },
   };
   return provider;
 }
@@ -95,9 +91,29 @@ export function mockProviderMultiTurn(
       const events = factory(request, callIndex++);
       yield* streamMockEvents(events);
     },
-    complete(request: ProviderRequest) {
-      return completeFromStream(provider, request);
-    },
   };
   return provider;
+}
+
+/**
+ * The stream of a finished result, through the real normalizer: what a provider would send for
+ * that answer. Lets tests describe an answer as a `GenerateResult` while `complete()` reads streams.
+ */
+export function streamFromResult(result: GenerateResult): AsyncIterable<StreamEvent> {
+  const raw: RawStreamEvent[] = [];
+  for (const block of result.message.content) {
+    if (block.type === "text") raw.push({ type: "text", delta: block.text, ...(block.signature !== undefined ? { signature: block.signature } : {}) });
+    else if (block.type === "thinking") raw.push({ type: "thinking", delta: block.thinking, ...(block.signature !== undefined ? { signature: block.signature } : {}) });
+    else {
+      raw.push({ type: "tool_start", callId: block.id, name: block.name });
+      raw.push({ type: "tool_call", callId: block.id, name: block.name, args: block.args });
+    }
+  }
+  raw.push({ type: "usage", usage: result.usage ?? { input: 0, output: 0, total: 0 }, finishReason: result.finishReason });
+  return normalizeProviderStream(source(raw));
+}
+
+/** `streamFromResult` for a result produced lazily; a thrown error fails the stream. */
+export async function* resultStream(produce: () => GenerateResult | Promise<GenerateResult>): AsyncIterable<StreamEvent> {
+  yield* streamFromResult(await produce());
 }

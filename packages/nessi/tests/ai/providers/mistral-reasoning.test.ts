@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { completeFromStream } from "../../../src/ai/index.js";
+import { complete } from "../../../src/ai/index.js";
 import { endpoint } from "../helpers/endpoints.js";
 import type { AssistantMessage, GenerateRequest } from "../../../src/ai/index.js";
-import { fixtureText, jsonResponse, stubFetch, textResponse } from "../helpers/fixtures.js";
+import { completionStream, fixtureText, stubFetch, textResponse } from "../helpers/fixtures.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -13,9 +13,9 @@ const sentBody = async (request: Partial<GenerateRequest>, options: Parameters<t
   let body: Record<string, unknown> = {};
   stubFetch(async (_input, init) => {
     body = JSON.parse(String(init?.body));
-    return jsonResponse({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }] });
+    return completionStream({ choices: [{ index: 0, message: { content: "ok" }, finish_reason: "stop" }] });
   });
-  await endpoint("mistral", { model: "mistral-medium", ...options }).complete({ messages: [], ...request });
+  await complete(endpoint("mistral", { model: "mistral-medium", ...options }), { messages: [], ...request });
   return body;
 };
 
@@ -23,7 +23,7 @@ describe("Mistral reasoning through openAICompatible", () => {
   it("streams thinking with its signature before the answer", async () => {
     stubFetch(async () => textResponse(await fixtureText("../fixtures/mistral/reasoning-signed.sse"), "text/event-stream"));
 
-    const { message } = await completeFromStream(endpoint("mistral", { model: "mistral-medium" }), { messages: [] });
+    const { message } = await complete(endpoint("mistral", { model: "mistral-medium" }), { messages: [] });
 
     expect(message.provider).toBe("mistral");
     expect(message.content).toEqual([
@@ -33,7 +33,7 @@ describe("Mistral reasoning through openAICompatible", () => {
   });
 
   it("parses thinking chunks from non-streaming responses in order", async () => {
-    stubFetch(async () => jsonResponse({
+    stubFetch(async () => completionStream({
       choices: [{
         index: 0,
         message: {
@@ -46,7 +46,7 @@ describe("Mistral reasoning through openAICompatible", () => {
       }],
     }));
 
-    const { message } = await endpoint("mistral", { model: "mistral-medium" }).complete({ messages: [] });
+    const { message } = await complete(endpoint("mistral", { model: "mistral-medium" }), { messages: [] });
 
     expect(message.content).toEqual([{ type: "thinking", thinking: "Hmm.", signature: "s" }, { type: "text", text: "Yes." }]);
   });
