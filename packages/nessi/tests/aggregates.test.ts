@@ -7,14 +7,13 @@ describe("loop aggregate helpers", () => {
     expect(
       mergeUsage(
         { input: 10, output: 5, total: 15, cacheRead: 2 },
-        { input: 20, output: 7, total: 27, creditsUsed: 1.5 },
+        { input: 20, output: 7, total: 27 },
       ),
     ).toEqual({
       input: 30,
       output: 12,
       total: 42,
       cacheRead: 2,
-      creditsUsed: 1.5,
     });
     expect(mergeUsage(undefined, undefined)).toBeUndefined();
   });
@@ -141,12 +140,12 @@ describe("loop aggregate helpers", () => {
       turns: [
         {
           message: { role: "assistant", content: [{ type: "text", text: "second" }] },
-          usage: { input: 20, output: 6, total: 26, creditsUsed: 2 },
+          usage: { input: 20, output: 6, total: 26 },
           stopReason: "stop",
           toolCalls: [{ callId: "c2", name: "lookup", args: {}, result: "boom", isError: true }],
         },
       ],
-      usage: { input: 20, output: 6, total: 26, creditsUsed: 2 },
+      usage: { input: 20, output: 6, total: 26 },
       timing: {
         wallMs: 2000,
         totalElapsedMs: 900,
@@ -194,7 +193,6 @@ describe("loop aggregate helpers", () => {
       output: 11,
       total: 41,
       cacheRead: 3,
-      creditsUsed: 2,
     });
     expect(merged?.timing).toEqual({
       wallMs: 3000,

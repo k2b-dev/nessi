@@ -6,7 +6,6 @@ import { defineTool } from "../src/tools.js";
 import { memoryStore } from "../src/stores.js";
 import { mockProvider, mockProviderMultiTurn } from "./mock-provider.js";
 import type {
-  CreditStore,
   OutboundEvent,
   Provider,
   ProviderEvent,
@@ -365,14 +364,12 @@ describe("nessi core loop", () => {
         input: "Hi",
         temperature: 0,
         maxOutputTokens: 64,
-        disableReasoning: true,
       }),
     );
 
     expect(events.some((event) => event.type === "loop_end")).toBe(true);
     expect(capturedRequest.temperature).toBe(0);
     expect(capturedRequest.maxOutputTokens).toBe(64);
-    expect(capturedRequest.disableReasoning).toBe(true);
   });
 
   it("passes reasoningEffort and extraBody to the provider", async () => {
@@ -524,12 +521,12 @@ describe("nessi core loop", () => {
         return [
           { type: "tool_start", callId: "c1", name: "echo" },
           { type: "tool_call", callId: "c1", name: "echo", args: { text: "hello" } },
-          { type: "usage", usage: { input: 10, output: 5, total: 15, cacheRead: 2, creditsUsed: 1.5 } },
+          { type: "usage", usage: { input: 10, output: 5, total: 15, cacheRead: 2 } },
         ];
       }
       return [
         { type: "text", delta: "The echo said: hello" },
-        { type: "usage", usage: { input: 20, output: 10, total: 30, creditsUsed: 2.5 } },
+        { type: "usage", usage: { input: 20, output: 10, total: 30 } },
       ];
     });
 
@@ -557,7 +554,6 @@ describe("nessi core loop", () => {
       output: 15,
       total: 45,
       cacheRead: 2,
-      creditsUsed: 4,
     });
     expect(done.aggregate?.turns[0]?.stopReason).toBe("tool_use");
     expect(done.aggregate?.turns[0]?.toolCalls).toEqual([
@@ -1165,94 +1161,6 @@ describe("nessi core loop", () => {
     expect(done.aggregate?.usage).toEqual({ input: 20, output: 10, total: 30 });
   });
 
-  it("stops when credits run out", async () => {
-    const creditStore: CreditStore = {
-      async remaining() {
-        return 0;
-      },
-      async deduct() {},
-    };
-
-    const events = await collectEvents(
-      nessi({
-        provider: mockProvider([
-          { type: "text", delta: "hello" },
-          { type: "usage", usage: { input: 10, output: 5, total: 15 } },
-        ]),
-        systemPrompt: "test",
-        store: memoryStore(),
-        creditStore,
-        input: "Hi",
-      }),
-    );
-
-    const done = events.find((e) => e.type === "loop_end") as any;
-    expect(done.reason).toBe("no_credits");
-    // Should not have any text events — stopped before provider call
-    const textEvents = events.filter((e) => e.type === "block_end" && e.block.type === "text");
-    expect(textEvents).toHaveLength(0);
-  });
-
-  it("deducts credits after turn", async () => {
-    let deducted = 0;
-    const creditStore: CreditStore = {
-      async remaining() {
-        return 100;
-      },
-      async deduct(credits) {
-        deducted += credits;
-      },
-    };
-
-    await collectEvents(
-      nessi({
-        provider: mockProvider([
-          { type: "text", delta: "hello" },
-          { type: "usage", usage: { input: 10, output: 5, total: 15, creditsUsed: 7 } },
-        ]),
-        systemPrompt: "test",
-        store: memoryStore(),
-        creditStore,
-        input: "Hi",
-      }),
-    );
-
-    expect(deducted).toBe(7);
-  });
-
-  it("includes persisted assistant turn in aggregate when credit deduction fails", async () => {
-    const store = memoryStore();
-    const creditStore: CreditStore = {
-      async remaining() {
-        return 100;
-      },
-      async deduct() {
-        throw new Error("credit write failed");
-      },
-    };
-
-    const events = await collectEvents(
-      nessi({
-        provider: mockProvider([
-          { type: "text", delta: "Charged answer." },
-          { type: "usage", usage: { input: 10, output: 5, total: 15, creditsUsed: 7 } },
-        ]),
-        systemPrompt: "test",
-        store,
-        creditStore,
-        input: "Hi",
-      }),
-    );
-
-    const done = events.find((e) => e.type === "loop_end") as any;
-    expect(done.reason).toBe("error");
-    expect(done.aggregate?.assistantMessageCount).toBe(1);
-    expect(done.aggregate?.usage).toEqual({ input: 10, output: 5, total: 15, creditsUsed: 7 });
-
-    const entries = await store.load();
-    expect(entries.filter((entry) => entry.message.role === "assistant")).toHaveLength(1);
-  });
-
   it("handles abort signal", async () => {
     const controller = new AbortController();
     controller.abort(); // abort immediately
@@ -1285,16 +1193,12 @@ describe("nessi core loop", () => {
       store: memoryStore(),
       input: "Hi",
     });
-    const subscribedEvents: OutboundEvent[] = [];
-    loop.subscribe((event) => subscribedEvents.push(event));
-
     loop.abort();
     const events = await collectEvents(loop);
 
     const done = events.find((e) => e.type === "loop_end");
     expect(done?.loopId).toBe("abort-loop");
     expect(events.every((event) => event.loopId === "abort-loop")).toBe(true);
-    expect(subscribedEvents.every((event) => event.loopId === "abort-loop")).toBe(true);
   });
 
   it("preserves stream block order for interrupted assistant messages", async () => {
@@ -1310,11 +1214,11 @@ describe("nessi core loop", () => {
       input: "Think then answer",
     });
 
-    loop.subscribe((event) => {
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
       if (event.type === "usage") loop.abort();
-    });
-
-    const events = await collectEvents(loop);
+    }
 
     const turnEnd = events.find((event) => event.type === "turn_end") as Extract<OutboundEvent, { type: "turn_end" }>;
     expect(turnEnd.message.stopReason).toBe("interrupted");
@@ -1341,11 +1245,11 @@ describe("nessi core loop", () => {
       input: "Empty stream",
     });
 
-    loop.subscribe((event) => {
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
       if (event.type === "usage") loop.abort();
-    });
-
-    const events = await collectEvents(loop);
+    }
 
     // The turn is closed, but nothing empty is stored; the reported usage still counts.
     const turnEnd = events.find((event) => event.type === "turn_end") as Extract<OutboundEvent, { type: "turn_end" }>;
@@ -1711,33 +1615,6 @@ describe("nessi core loop", () => {
     expect(issue.type).toBe("issue");
     if (issue.type !== "issue") return;
     expect(issue.issue.message).toContain("overflow compact failed");
-  });
-
-  it("subscribe() receives events in parallel", async () => {
-    const subscribedEvents: OutboundEvent[] = [];
-
-    const loop = nessi({
-      provider: mockProvider([
-        { type: "text", delta: "Hello" },
-        { type: "usage", usage: { input: 10, output: 5, total: 15 } },
-      ]),
-      systemPrompt: "test",
-      store: memoryStore(),
-      input: "Hi",
-    });
-
-    const unsub = loop.subscribe((event) => subscribedEvents.push(event));
-
-    const iteratedEvents: OutboundEvent[] = [];
-    for await (const event of loop) {
-      iteratedEvents.push(event);
-    }
-
-    unsub();
-
-    // Both should have received the same events
-    expect(subscribedEvents.length).toBe(iteratedEvents.length);
-    expect(subscribedEvents.map((e) => e.type)).toEqual(iteratedEvents.map((e) => e.type));
   });
 
   it("handles multiple tools in one turn", async () => {

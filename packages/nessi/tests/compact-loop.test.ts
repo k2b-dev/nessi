@@ -152,27 +152,4 @@ describe("compact loop", () => {
     expect(events.map((event) => event.loopId)).toEqual(["compact-1", "compact-1"]);
   });
 
-  it("delivers same event order to subscribe() and iterator", async () => {
-    const store = memoryStore();
-    await store.append(userMessage("1"));
-    await store.append(userMessage("2"));
-    await store.append(userMessage("3"));
-
-    const loop = compact({
-      store,
-      provider,
-      compact: (ctx) => ctx.store.append(userMessage("summary"), { seq: 2, kind: "summary" }),
-    });
-
-    const subscribed: CompactEvent[] = [];
-    const unsub = loop.subscribe((event) => subscribed.push(event));
-
-    const iterated: CompactEvent[] = [];
-    for await (const event of loop) {
-      iterated.push(event);
-    }
-    unsub();
-
-    expect(subscribed.map((e) => e.type)).toEqual(iterated.map((e) => e.type));
-  });
 });

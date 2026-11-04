@@ -7,7 +7,7 @@ import type {
 import { createLoopId, followAbortSignal, zeroUsage, toErrorMessage } from "./utils.js";
 
 /**
- * Run compaction as a loop-style operation so consumers can iterate or subscribe to events.
+ * Run compaction as a loop-style operation whose events consumers iterate.
  */
 export const compact = (options: CompactOptions): CompactLoop => {
   const {
@@ -21,7 +21,6 @@ export const compact = (options: CompactOptions): CompactLoop => {
     signal: externalSignal,
   } = options;
 
-  const subscribers: Array<(event: CompactEvent) => void> = [];
   const abortController = new AbortController();
   const loopId = requestedLoopId?.trim() ? requestedLoopId : createLoopId();
   const eventFields = { agentId, loopId };
@@ -119,18 +118,7 @@ export const compact = (options: CompactOptions): CompactLoop => {
       return {
         async next() {
           attachExternalSignal();
-          const result = await generator.next();
-          if (!result.done && result.value) {
-            try {
-              for (const subscriber of subscribers) subscriber(result.value);
-            } catch (error) {
-              // A failing subscriber ends the run; the suspended generator never reaches its cleanup.
-              abortController.abort();
-              detachExternalSignal();
-              throw error;
-            }
-          }
-          return result;
+          return generator.next();
         },
         async return(value?: CompactEvent) {
           detachExternalSignal();
@@ -140,13 +128,6 @@ export const compact = (options: CompactOptions): CompactLoop => {
           detachExternalSignal();
           return generator.throw(err);
         },
-      };
-    },
-    subscribe(listener: (event: CompactEvent) => void) {
-      subscribers.push(listener);
-      return () => {
-        const idx = subscribers.indexOf(listener);
-        if (idx >= 0) subscribers.splice(idx, 1);
       };
     },
     abort() {

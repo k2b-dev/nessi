@@ -2,23 +2,17 @@ import { describe, expect, it } from "bun:test";
 import { resolveReasoning, withExtraBody } from "../../../src/ai/shared/request-options.js";
 
 describe("resolveReasoning", () => {
-  it("prefers the request effort over the provider default and the deprecated flag", () => {
-    expect(resolveReasoning({ messages: [], reasoningEffort: "high", disableReasoning: true }, { reasoningEffort: "low" }))
-      .toEqual({ effort: "high", legacyDisable: false });
-  });
-
-  it("treats disableReasoning as a request setting that beats the provider default", () => {
-    expect(resolveReasoning({ messages: [], disableReasoning: true }, { reasoningEffort: "high" }))
-      .toEqual({ legacyDisable: true });
+  it("prefers the request effort over the provider default", () => {
+    expect(resolveReasoning({ messages: [], reasoningEffort: "high" }, { reasoningEffort: "low" })).toBe("high");
   });
 
   it("falls back to the provider default and otherwise sends nothing", () => {
-    expect(resolveReasoning({ messages: [] }, { reasoningEffort: "medium" })).toEqual({ effort: "medium", legacyDisable: false });
-    expect(resolveReasoning({ messages: [] })).toEqual({ effort: undefined, legacyDisable: false });
+    expect(resolveReasoning({ messages: [] }, { reasoningEffort: "medium" })).toBe("medium");
+    expect(resolveReasoning({ messages: [] })).toBeUndefined();
   });
 
   it("passes unknown effort strings through unchanged", () => {
-    expect(resolveReasoning({ messages: [], reasoningEffort: "ultra-2027" }).effort).toBe("ultra-2027");
+    expect(resolveReasoning({ messages: [], reasoningEffort: "ultra-2027" })).toBe("ultra-2027");
   });
 });
 

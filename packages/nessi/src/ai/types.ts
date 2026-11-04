@@ -76,7 +76,6 @@ export type Usage = {
   /** Part of `input` the provider read from its prompt cache. */
   cacheRead?: number;
   total: number;
-  creditsUsed?: number;
 };
 
 export type JsonSchemaObject = Record<string, unknown>;
@@ -218,12 +217,6 @@ export type GenerateRequest = {
   reasoningEffort?: ReasoningEffort;
   /** Extra request body fields for this call, merged over the provider's `extraBody`. */
   extraBody?: Record<string, unknown>;
-  /**
-   * @deprecated Use `reasoningEffort: "none"` (or a low level) instead. Kept with its original
-   * mapping: `openAICompatible()` sends `reasoning_effort: "low"`. Ignored when `reasoningEffort`
-   * is set on the request.
-   */
-  disableReasoning?: boolean;
 };
 
 export type GenerateResult = {
@@ -336,7 +329,5 @@ export type OpenAICompatibleConfig = ProviderRequestDefaults & {
   compat?: OpenAICompat;
   timeouts?: ProviderTimeouts;
   temperature?: number;
-  creditsPerInputToken?: number;
-  creditsPerOutputToken?: number;
   headers?: Record<string, string>;
 };

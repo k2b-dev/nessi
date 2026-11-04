@@ -63,14 +63,6 @@ describe("caller abort signals", () => {
     expect(caller.active()).toBe(0);
   });
 
-  it("keep no listener when a subscriber throws", async () => {
-    const caller = countedSignal();
-    const loop = nessi({ provider: answer(), store: memoryStore(), systemPrompt: "test", input: "Hi", signal: caller.signal });
-    loop.subscribe(() => { throw new Error("subscriber failed"); });
-    await expect((async () => { for await (const _event of loop) { /* drain */ } })()).rejects.toThrow("subscriber failed");
-    expect(caller.active()).toBe(0);
-  });
-
   it("keep no listener from finished compactions", async () => {
     const caller = countedSignal();
     for (let run = 0; run < 10; run++) {
