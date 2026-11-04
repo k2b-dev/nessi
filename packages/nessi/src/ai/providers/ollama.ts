@@ -272,7 +272,13 @@ export const ollama = (model: string, options?: OllamaOptions): Provider => {
       }
 
       if (!response.ok) {
-        const normalized = await normalizeHttpError("ollama", response);
+        // Startup timers are cleared by now; a stalled error body must not hang the request.
+        const normalized = await normalizeHttpError(
+          "ollama",
+          response,
+          undefined,
+          { idleMs: options?.timeouts?.idleMs, deadlineAt: firstByteDeadline },
+        );
         cleanupExternalAbort();
         yield { type: "error", ...normalized };
         return;

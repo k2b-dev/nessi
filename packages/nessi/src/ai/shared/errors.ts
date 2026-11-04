@@ -63,6 +63,58 @@ export const parseOverflowRatio = (message: string): number | undefined => {
   return max > 0 ? actual / max : undefined;
 };
 
+/** An error body only feeds the error message; anything past this budget is dropped. */
+export const ERROR_BODY_LIMIT_BYTES = 64 * 1024;
+
+export type ErrorBodyLimits = {
+  /** Gives up when one read stalls this long. */
+  idleMs?: number;
+  /** Gives up at this time (`Date.now()` milliseconds), however the body flows. */
+  deadlineAt?: number;
+};
+
+/**
+ * Reads at most `ERROR_BODY_LIMIT_BYTES` of an error body. The status is already known, so a
+ * stalled, failed, or oversized body still yields the error with what arrived.
+ */
+export const readErrorBody = async (response: Response, limits: ErrorBodyLimits = {}): Promise<string> => {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  let truncated = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    while (true) {
+      const waits = [limits.idleMs, limits.deadlineAt === undefined ? undefined : limits.deadlineAt - Date.now()]
+        .filter((ms): ms is number => ms !== undefined && Number.isFinite(ms));
+      const waitMs = waits.length > 0 ? Math.min(...waits) : undefined;
+      if (waitMs !== undefined && waitMs <= 0) break;
+      const stalled = new Promise<"stalled">((resolve) => {
+        if (waitMs !== undefined) timeout = setTimeout(() => resolve("stalled"), waitMs);
+      });
+      const result = await Promise.race([reader.read(), stalled]);
+      clearTimeout(timeout);
+      if (result === "stalled" || result.done) break;
+      const chunk = result.value.subarray(0, ERROR_BODY_LIMIT_BYTES - bytes);
+      bytes += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (chunk.byteLength < result.value.byteLength || bytes >= ERROR_BODY_LIMIT_BYTES) {
+        truncated = true;
+        break;
+      }
+    }
+  } catch {
+    // A failed body read leaves the diagnostics read so far.
+  } finally {
+    clearTimeout(timeout);
+    void reader.cancel().catch(() => {});
+  }
+  // A cut body drops its incomplete last character instead of flushing a replacement character.
+  return truncated ? text : text + decoder.decode();
+};
+
 /** `retry-after-ms` (OpenAI) wins over the standard `retry-after` seconds or HTTP date. */
 export const parseRetryAfterMs = (headers: Headers, now = Date.now()): number | undefined => {
   const milliseconds = Number(headers.get("retry-after-ms")?.trim() || Number.NaN);
@@ -79,8 +131,9 @@ export const normalizeHttpError = async (
   label: string,
   response: Response,
   retryableOverride?: boolean,
+  limits?: ErrorBodyLimits,
 ) => {
-  const rawText = await response.text().catch(() => "");
+  const rawText = await readErrorBody(response, limits);
   const { message, code } = parseErrorMessage(rawText);
   const fullMessage = code ? `${message} (code: ${code})` : message || `HTTP ${response.status}`;
   const contextOverflow = isContextOverflow(response.status, fullMessage);
