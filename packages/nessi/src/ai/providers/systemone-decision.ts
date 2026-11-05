@@ -88,18 +88,29 @@ const toAnswer = (question: DecisionQuestion, raw: unknown) => {
   return question.type === "choice" ? choiceAnswer(question, raw) : scoreAnswer(question, raw);
 };
 
-/** Reads a whole response body and notes when its first byte arrived. */
-const readBody = async (response: Response, onFirstByte: () => void): Promise<string> => {
+/**
+ * Reads a whole response body and notes when its first byte arrived. An abort cancels the read, also
+ * when the body ignores the request's signal, and rejects with the caller's reason.
+ */
+const readBody = async (response: Response, onFirstByte: () => void, signal?: AbortSignal): Promise<string> => {
   const reader = response.body?.getReader();
   if (!reader) return "";
+  const cancel = () => void reader.cancel(signal?.reason).catch(() => {});
+  signal?.addEventListener("abort", cancel, { once: true });
   const decoder = new TextDecoder();
   let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) return text + decoder.decode();
-    if (value.byteLength > 0) onFirstByte();
-    text += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > 0) onFirstByte();
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    signal?.removeEventListener("abort", cancel);
   }
+  signal?.throwIfAborted();
+  return text + decoder.decode();
 };
 
 /** Shared System One client; presets differ only in URL, headers and response envelope. */
@@ -113,6 +124,13 @@ export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProv
     const { name } = endpoint;
     const headers = { ...endpoint.headers, "Content-Type": "application/json" };
     assertHeaderValues(name, headers);
+    // Built first: a request that cannot be serialized is never sent and reports nothing.
+    const body = JSON.stringify({
+      model: endpoint.model,
+      state,
+      questions,
+      ...(images?.length ? { images: images.map((image) => `data:${image.mediaType};base64,${image.data}`) } : {}),
+    });
     // One report per request that left, with the same fields as for model calls. It reaches the hook
     // once the request settles, before the result or the error reaches the caller.
     const report: TransportReport = { startedAt: Date.now() };
@@ -123,12 +141,7 @@ export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProv
       const response = await fetch(endpoint.url, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          model: endpoint.model,
-          state,
-          questions,
-          ...(images?.length ? { images: images.map((image) => `data:${image.mediaType};base64,${image.data}`) } : {}),
-        }),
+        body,
         redirect: "error",
         signal,
       }).catch((error: unknown) => {
@@ -142,19 +155,22 @@ export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProv
       const retryAfterMs = parseRetryAfterMs(response.headers);
       if (retryAfterMs !== undefined) report.retryAfterMs = retryAfterMs;
 
-      const text = response.ok ? await readBody(response, noteFirstByte) : await readErrorBody(response, { onFirstByte: noteFirstByte });
-      let body: unknown;
+      const text = response.ok
+        ? await readBody(response, noteFirstByte, signal)
+        : await readErrorBody(response, { signal, onFirstByte: noteFirstByte });
+      signal?.throwIfAborted();
+      let parsed: unknown;
       try {
-        body = JSON.parse(text);
+        parsed = JSON.parse(text);
       } catch {
         if (!response.ok) throw new Error(`${name} ${response.status}: ${text || response.statusText}`);
         throw new Error(`${name} returned invalid decision JSON.`);
       }
       if (!response.ok) {
-        throw new Error(`${name} ${response.status}: ${decisionErrorMessage(body) ?? (text || response.statusText)}`);
+        throw new Error(`${name} ${response.status}: ${decisionErrorMessage(parsed) ?? (text || response.statusText)}`);
       }
 
-      const raw = endpoint.unwrap ? endpoint.unwrap(body) : body;
+      const raw = endpoint.unwrap ? endpoint.unwrap(parsed) : parsed;
       if (!isRecord(raw) || !isRecord(raw.answers)) throw new Error(`${name} returned a decision without answers.`);
       const result = raw as SystemOneResponse & { answers: Record<string, unknown> };
 

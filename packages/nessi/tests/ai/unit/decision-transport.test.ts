@@ -83,6 +83,37 @@ describe("decision onTransport", () => {
     expect(reports).toEqual([]);
   });
 
+  for (const status of [200, 429]) {
+    it(`ends a stalled ${status} body on abort, also when the body ignores the signal, and reports once`, async () => {
+      const caller = new AbortController();
+      const reason = new Error("stop");
+      stubFetch(() => {
+        setTimeout(() => caller.abort(reason), 10);
+        // The body never ends and is not tied to the request's signal.
+        return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode('{"answers":')); } }), { status });
+      });
+      const reports: TransportReport[] = [];
+      const started = Date.now();
+      await expect(router().decide({ state: "x", questions, signal: caller.signal, onTransport: (report) => reports.push(report) })).rejects.toBe(reason);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(reports).toEqual([expect.objectContaining({ status, firstByteAt: expect.any(Number) })]);
+    });
+  }
+
+  it("reports nothing for a request that cannot be serialized", async () => {
+    let sent = 0;
+    stubFetch(() => {
+      sent++;
+      return answer();
+    });
+    const state: Record<string, unknown> = {};
+    state.self = state;
+    const reports: TransportReport[] = [];
+    await expect(router().decide({ state, questions, onTransport: (report) => reports.push(report) })).rejects.toThrow();
+    expect(sent).toBe(0);
+    expect(reports).toEqual([]);
+  });
+
   it("ignores an error thrown by the hook", async () => {
     stubFetch(answer);
     const result = await router().decide({ state: "x", questions, onTransport: () => { throw new Error("telemetry down"); } });
