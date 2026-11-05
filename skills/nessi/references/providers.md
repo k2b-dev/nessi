@@ -89,6 +89,8 @@ decision models behind the System One API (`POST {baseURL}/systemone`), e.g.
 self-hosted Clef, Kev or jev-local, or hosted Jev. Use
 `cloudflareDecision(model, { accountId, apiToken })` for Clef on Workers AI.
 Both return a `DecisionProvider` with `decide()`, not a chat `Provider`.
+`decide()` accepts `signal` and `onTransport`; the transport report has the same
+shape as for model calls.
 
 ```ts
 const { answers, usage, raw } = await router.decide({
