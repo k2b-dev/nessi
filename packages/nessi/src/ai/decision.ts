@@ -1,4 +1,4 @@
-import type { Usage } from "./types.js";
+import type { TransportReport, Usage } from "./types.js";
 
 // ----------------------------------------------------------------------------
 // Questions
@@ -91,6 +91,11 @@ export type DecisionRequest<TQuestions extends DecisionQuestions> = {
   questions: TQuestions;
   images?: DecisionImage[];
   signal?: AbortSignal;
+  /**
+   * Called once when the request settles: answered, rejected, failed or aborted, before the
+   * result or error reaches the caller. Same report as for model calls; observation only.
+   */
+  onTransport?: (report: TransportReport) => void;
 };
 
 /** Response body of the System One `/v1/systemone` API, as sent by the provider. */

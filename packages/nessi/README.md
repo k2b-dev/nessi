@@ -610,7 +610,10 @@ provider limits such as the number of questions or options, which differ
 between models. HTTP, connection and malformed-response errors reject the
 promise, `signal` cancels with its reason, and there are no automatic retries.
 Decision calls have no timeout of their own; pass one, for example
-`signal: AbortSignal.timeout(5_000)`.
+`signal: AbortSignal.timeout(5_000)`. `onTransport` reports the request once it
+settles, with the same report as for model calls (see
+[Transport report](#transport-report)): status, Retry-After, timings, or the
+connection code.
 
 Every provider checks its request headers before sending. An API key or header
 value with a line break or another character HTTP does not allow rejects with an

@@ -10,7 +10,8 @@ import type {
   ScoreQuestion,
   SystemOneResponse,
 } from "../decision.js";
-import { assertHeaderValues, formatConnectionError, readErrorBody } from "../shared/errors.js";
+import { assertHeaderValues, formatConnectionError, parseRetryAfterMs, readErrorBody, runtimeErrorCode } from "../shared/errors.js";
+import type { TransportReport } from "../types.js";
 
 export type SystemOneDecisionOptions = {
   /** Base URL including `/v1`; `/systemone` is appended. */
@@ -87,65 +88,115 @@ const toAnswer = (question: DecisionQuestion, raw: unknown) => {
   return question.type === "choice" ? choiceAnswer(question, raw) : scoreAnswer(question, raw);
 };
 
+/**
+ * Reads a whole response body and notes when its first byte arrived. An abort cancels the read, also
+ * when the body ignores the request's signal, and rejects with the caller's reason.
+ */
+const readBody = async (response: Response, onFirstByte: () => void, signal?: AbortSignal): Promise<string> => {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const cancel = () => void reader.cancel(signal?.reason).catch(() => {});
+  signal?.addEventListener("abort", cancel, { once: true });
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > 0) onFirstByte();
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
+  signal?.throwIfAborted();
+  return text + decoder.decode();
+};
+
 /** Shared System One client; presets differ only in URL, headers and response envelope. */
 export const createDecisionProvider = (endpoint: DecisionEndpoint): DecisionProvider => ({
   name: endpoint.name,
   model: endpoint.model,
   async decide<const TQuestions extends DecisionQuestions>(
-    { state, questions, images, signal }: DecisionRequest<TQuestions>,
+    { state, questions, images, signal, onTransport }: DecisionRequest<TQuestions>,
   ): Promise<DecisionResult<TQuestions>> {
     signal?.throwIfAborted();
     const { name } = endpoint;
     const headers = { ...endpoint.headers, "Content-Type": "application/json" };
     assertHeaderValues(name, headers);
-    const response = await fetch(endpoint.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: endpoint.model,
-        state,
-        questions,
-        ...(images?.length ? { images: images.map((image) => `data:${image.mediaType};base64,${image.data}`) } : {}),
-      }),
-      redirect: "error",
-      signal,
-    }).catch((error: unknown) => {
-      signal?.throwIfAborted();
-      throw new Error(formatConnectionError(name, error));
+    // Built first: a request that cannot be serialized is never sent and reports nothing.
+    const body = JSON.stringify({
+      model: endpoint.model,
+      state,
+      questions,
+      ...(images?.length ? { images: images.map((image) => `data:${image.mediaType};base64,${image.data}`) } : {}),
     });
-
-    const text = response.ok ? await response.text() : await readErrorBody(response);
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      if (!response.ok) throw new Error(`${name} ${response.status}: ${text || response.statusText}`);
-      throw new Error(`${name} returned invalid decision JSON.`);
-    }
-    if (!response.ok) {
-      throw new Error(`${name} ${response.status}: ${decisionErrorMessage(body) ?? (text || response.statusText)}`);
-    }
-
-    const raw = endpoint.unwrap ? endpoint.unwrap(body) : body;
-    if (!isRecord(raw) || !isRecord(raw.answers)) throw new Error(`${name} returned a decision without answers.`);
-    const result = raw as SystemOneResponse & { answers: Record<string, unknown> };
-
-    const answers: Record<string, DecisionAnswer> = {};
-    for (const [id, question] of Object.entries(questions)) {
-      const answer = toAnswer(question, result.answers[id]);
-      if (!answer) throw new Error(`${name} returned an invalid answer for question "${id}".`);
-      answers[id] = answer;
-    }
-
-    const input = result.usage?.input_tokens ?? 0;
-    const output = result.usage?.output_tokens ?? 0;
-    return {
-      model: typeof result.model === "string" ? result.model : endpoint.model,
-      // Each answer was validated against its question above.
-      answers: answers as DecisionAnswers<TQuestions>,
-      usage: { input, output, total: input + output },
-      raw: result,
+    // One report per request that left, with the same fields as for model calls. It reaches the hook
+    // once the request settles, before the result or the error reaches the caller.
+    const report: TransportReport = { startedAt: Date.now() };
+    const noteFirstByte = () => {
+      report.firstByteAt ??= Date.now();
     };
+    try {
+      const response = await fetch(endpoint.url, {
+        method: "POST",
+        headers,
+        body,
+        redirect: "error",
+        signal,
+      }).catch((error: unknown) => {
+        const code = signal?.aborted ? undefined : runtimeErrorCode(error);
+        if (code !== undefined) report.connectionCode = code;
+        signal?.throwIfAborted();
+        throw new Error(formatConnectionError(name, error));
+      });
+      report.headersAt = Date.now();
+      report.status = response.status;
+      const retryAfterMs = parseRetryAfterMs(response.headers);
+      if (retryAfterMs !== undefined) report.retryAfterMs = retryAfterMs;
+
+      const text = response.ok
+        ? await readBody(response, noteFirstByte, signal)
+        : await readErrorBody(response, { signal, onFirstByte: noteFirstByte });
+      signal?.throwIfAborted();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        if (!response.ok) throw new Error(`${name} ${response.status}: ${text || response.statusText}`);
+        throw new Error(`${name} returned invalid decision JSON.`);
+      }
+      if (!response.ok) {
+        throw new Error(`${name} ${response.status}: ${decisionErrorMessage(parsed) ?? (text || response.statusText)}`);
+      }
+
+      const raw = endpoint.unwrap ? endpoint.unwrap(parsed) : parsed;
+      if (!isRecord(raw) || !isRecord(raw.answers)) throw new Error(`${name} returned a decision without answers.`);
+      const result = raw as SystemOneResponse & { answers: Record<string, unknown> };
+
+      const answers: Record<string, DecisionAnswer> = {};
+      for (const [id, question] of Object.entries(questions)) {
+        const answer = toAnswer(question, result.answers[id]);
+        if (!answer) throw new Error(`${name} returned an invalid answer for question "${id}".`);
+        answers[id] = answer;
+      }
+
+      const input = result.usage?.input_tokens ?? 0;
+      const output = result.usage?.output_tokens ?? 0;
+      return {
+        model: typeof result.model === "string" ? result.model : endpoint.model,
+        // Each answer was validated against its question above.
+        answers: answers as DecisionAnswers<TQuestions>,
+        usage: { input, output, total: input + output },
+        raw: result,
+      };
+    } finally {
+      try {
+        onTransport?.(report);
+      } catch {
+        // Observation only: a failing hook must not change the request's outcome.
+      }
+    }
   },
 });
 
