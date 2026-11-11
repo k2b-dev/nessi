@@ -243,6 +243,8 @@ export type GenerateRequest = {
    * aborted. Observation only; an error thrown here does not change the request.
    */
   onTransport?: (report: TransportReport) => void;
+  /** Emit display-only tool_args_delta previews while arguments stream. Off by default. */
+  toolArgsPreview?: boolean;
 };
 
 /** What the transport saw of one request; times are `Date.now()` milliseconds. */
@@ -291,10 +293,19 @@ export type BlockEndEvent = {
   block: AssistantContentBlock;
 };
 
+/** Provisional argument text for display only. May end without a final call; never execute it. */
+export type ToolArgsDeltaEvent = {
+  type: "tool_args_delta";
+  callId: string;
+  name: string;
+  delta: string;
+};
+
 export type StreamEvent =
   | BlockStartEvent
   | BlockDeltaEvent
   | BlockEndEvent
+  | ToolArgsDeltaEvent
   | { type: "issue"; issue: NessiIssue }
   | { type: "usage"; usage: Usage; finishReason?: AssistantStopReason };
 

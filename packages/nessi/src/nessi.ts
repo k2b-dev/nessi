@@ -596,6 +596,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
     maxOutputTokens,
     reasoningEffort,
     extraBody,
+    toolArgsPreview,
     coalesce,
     maxToolResultChars,
     maxParallelToolCalls = DEFAULT_MAX_PARALLEL_TOOL_CALLS,
@@ -1644,6 +1645,7 @@ export const nessi = (options: NessiOptions): NessiLoop => {
             systemPrompt,
             messages,
             tools: providerTools,
+            ...(toolArgsPreview !== undefined ? { toolArgsPreview } : {}),
             temperature,
             maxOutputTokens,
             reasoningEffort,
@@ -1658,6 +1660,10 @@ export const nessi = (options: NessiOptions): NessiLoop => {
               if (signal.aborted) break;
 
               switch (event.type) {
+                case "tool_args_delta":
+                  if (toolArgsPreview) yield { ...event, ...eventFields };
+                  break;
+
                 case "block_start":
                   if (event.kind === "text" || event.kind === "thinking") {
                     openBlocks.set(event.blockId, { index: event.index, kind: event.kind, text: "" });

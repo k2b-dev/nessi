@@ -515,7 +515,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         finishReason: latestFinishReason ?? "stop",
       };
       };
-      return normalizeProviderStream(raw(), { suppressTextAfterMalformedTool: true });
+      return normalizeProviderStream(raw(), { suppressTextAfterMalformedTool: true, toolArgsPreview: request.toolArgsPreview });
     },
   };
 

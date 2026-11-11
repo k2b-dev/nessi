@@ -139,12 +139,14 @@ Event meanings:
 - `block_start`: a normalized assistant content block started. `kind` is `text`, `thinking`, or `tool_call`.
 - `block_delta`: incremental text for the current block. Track `block_start.kind` by `blockId` before printing deltas.
 - `block_end`: final structured assistant content block. Executable provider tool calls appear here as `block.type === "tool_call"`.
+- `tool_args_delta`: provisional argument text (`callId`, `name`, `delta`), emitted only with `toolArgsPreview: true`. Display only; it never opens a block or makes a call executable.
 - `issue`: structured provider, timeout, malformed/cancelled tool-stream, tool-execution, or runtime problem.
 - `usage`: token usage, sometimes with final `finishReason`.
 
 Every `turn_start` gets a matching `turn_end`, including failed or aborted turns (partial message with `stopReason` `"error"` or `"interrupted"`; an abort during tool execution keeps the stored message). Usage reported before a failure still counts in the aggregate. A provider-side stop (`finishReason: "error"`, such as a safety filter) skips that turn's tool calls, also on later resumes, and ends the loop with `"error"`.
 
-Root `nessi()` loops forward provider block events and add `loopId`, `turnId`, and `turnIndex`:
+Root `nessi()` loops forward provider block events and opted-in previews with
+`agentId`, `loopId`, `turnId`, and `turnIndex`:
 
 ```ts
 for await (const event of loop) {
@@ -182,7 +184,29 @@ if (event.type === "block_end" && event.block.type === "tool_call") {
 }
 ```
 
-Provider adapters do not expose half-open tool starts through the public stream.
+Provider adapters do not expose half-open tool starts as public blocks.
+Set `toolArgsPreview: true` on `provider.stream()` or root `nessi()` to receive
+`tool_args_delta` while a pending call streams:
+
+```ts
+for await (const event of provider.stream({ messages, toolArgsPreview: true })) {
+  if (event.type === "tool_args_delta") {
+    // Append to a display-only buffer keyed by event.callId. Never execute from this event.
+    showArgumentPreview(event.callId, event.name, event.delta);
+  }
+}
+```
+
+Previews are off by default. Each event contains one raw argument fragment in
+provider order; the accumulated text may be incomplete or invalid JSON. A
+preview may stop without a final block and may be followed by a
+`malformed_tool_call` or `cancelled_tool_call` issue for the same `callId`.
+Never execute a tool from a preview. Previews do not open blocks, consume block
+indices, or change the existing block and issue sequence. Root loops forward
+them unchanged even with `coalesce` enabled and never store them in messages
+or tool-call aggregates. `complete()` ignores previews; `nessi.structured()`
+does not enable them.
+
 If text, thinking text, invalid JSON, a provider error, or stream end interrupts
 a pending tool call, the public event is `issue` with `issue.kind` set to
 `malformed_tool_call` or `cancelled_tool_call`.

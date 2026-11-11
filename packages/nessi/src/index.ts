@@ -31,6 +31,7 @@ export type {
   Input,
   // Events
   OutboundEvent,
+  ToolArgsDeltaEvent,
   InboundEvent,
   DoneReason,
   ToolActionKind,

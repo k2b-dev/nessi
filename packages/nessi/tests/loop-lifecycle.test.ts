@@ -26,6 +26,93 @@ const toolCallTurn = (name: string, args: Record<string, unknown> = {}): Paramet
 ];
 
 describe("nessi loop lifecycle", () => {
+  it.each([false, true])("forwards opt-in previews without persisting or coalescing them (coalesce=%s)", async (coalesce) => {
+    const originalFetch = globalThis.fetch;
+    const deltas = ['{"path":"a.ts",', '"content":"hello', ' world"}'];
+    const records = deltas.map((args, index) => ({ choices: [{ index: 0, delta: { tool_calls: [{
+      index: 0,
+      ...(index === 0 ? { id: "c1", type: "function" } : {}),
+      function: { ...(index === 0 ? { name: "code_write" } : {}), arguments: args },
+    }] }, finish_reason: null }] }));
+    const sse = records.map((record) => `data: ${JSON.stringify(record)}\n\n`).join("")
+      + 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n';
+    let executed = 0;
+    const write = defineTool({
+      name: "code_write", description: "Write a file", inputSchema: z.object({ path: z.string(), content: z.string() }),
+    }).server(async () => { executed++; return "written"; });
+    const store = memoryStore();
+    try {
+      stubFetch(() => textResponse(sse, "text/event-stream"));
+      const events: OutboundEvent[] = [];
+      const loop = nessi({
+        provider: openAICompatible({ name: "mock", model: "mock", baseURL: "https://example.test/v1" }),
+        store, systemPrompt: "sys", input: "write", tools: [write], maxTurns: 1,
+        loopId: "preview-loop", agentId: "writer", toolArgsPreview: true,
+        coalesce: coalesce ? { maxChars: 1000 } : undefined,
+      });
+      for await (const event of loop) {
+        events.push(event);
+        if (event.type === "tool_args_delta") {
+          expect(executed).toBe(0);
+          expect((await store.load()).map((entry) => entry.message)).toEqual([{ role: "user", content: [{ type: "text", text: "write" }] }]);
+        }
+      }
+      const turn = events.find((event) => event.type === "turn_start");
+      if (!turn) throw new Error("Missing turn_start");
+      expect(events.filter((event) => event.type === "tool_args_delta")).toEqual(deltas.map((delta) => ({
+        type: "tool_args_delta", callId: "c1", name: "code_write", delta,
+        agentId: "writer", loopId: "preview-loop", turnId: turn.turnId, turnIndex: 0,
+      })));
+      expect(events.filter((event) => event.type === "tool_args_delta" || event.type.startsWith("block_")).map((event) => event.type))
+        .toEqual(["tool_args_delta", "tool_args_delta", "tool_args_delta", "block_start", "block_delta", "block_end"]);
+      expect(executed).toBe(1);
+      const entries = await store.load();
+      expect(entries.map((entry) => entry.message.role)).toEqual(["user", "assistant", "tool_result"]);
+      expect(entries[1]?.message).toMatchObject({ content: [{ type: "tool_call", id: "c1", name: "code_write", args: { path: "a.ts", content: "hello world" } }] });
+      const end = events.find((event) => event.type === "loop_end");
+      expect(end?.aggregate.turns[0]?.toolCalls).toEqual([{ callId: "c1", name: "code_write", args: { path: "a.ts", content: "hello world" }, result: "written" }]);
+      expect(JSON.stringify(entries)).not.toContain("tool_args_delta");
+      expect(JSON.stringify(end?.aggregate)).not.toContain("tool_args_delta");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("discards preview-only turns on abort without executing or storing a call", async () => {
+    const store = memoryStore();
+    let closed = false;
+    const provider: Provider = {
+      ...mockProvider([]),
+      async *stream(request) {
+        expect(request.toolArgsPreview).toBe(true);
+        try {
+          yield { type: "tool_args_delta", callId: "c1", name: "code_write", delta: '{"content":' };
+          throw new Error("must not read past the aborted preview");
+        } finally {
+          closed = true;
+        }
+      },
+    };
+    const loop = nessi({ provider, store, systemPrompt: "sys", input: "write", toolArgsPreview: true });
+    const events: OutboundEvent[] = [];
+    for await (const event of loop) {
+      events.push(event);
+      if (event.type === "tool_args_delta") loop.abort();
+    }
+    expect(closed).toBe(true);
+    expect((await store.load()).map((entry) => entry.message.role)).toEqual(["user"]);
+    expect(events.some((event) => event.type === "tool_execution_start" || event.type.startsWith("block_"))).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "aborted", aggregate: { toolCallCount: 0 } });
+  });
+
+  it.each([undefined, false])("does not forward unsolicited previews when opt-in is %s", async (toolArgsPreview) => {
+    const events = await collect(nessi({
+      provider: mockProvider([{ type: "tool_args_delta", callId: "c1", name: "code_write", delta: "{}" }]),
+      store: memoryStore(), systemPrompt: "sys", input: "write", toolArgsPreview,
+    }));
+    expect(events.map((event) => event.type)).toEqual(["loop_start", "turn_start", "turn_end", "loop_end"]);
+  });
+
   it("aborts promptly while a server tool ignores its signal", async () => {
     const stubborn = defineTool({
       name: "stubborn",

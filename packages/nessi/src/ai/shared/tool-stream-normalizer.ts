@@ -18,6 +18,7 @@ type PendingToolCall = {
 };
 
 type NormalizerOptions = {
+  toolArgsPreview?: boolean;
   suppressTextAfterMalformedTool?: boolean;
 };
 
@@ -252,6 +253,9 @@ export async function* normalizeProviderStream(
             break;
           }
           tool.argsText += event.argsDelta;
+          if (options.toolArgsPreview) {
+            yield { type: "tool_args_delta", callId: tool.callId, name: tool.name, delta: event.argsDelta };
+          }
           break;
         }
 

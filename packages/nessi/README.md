@@ -361,6 +361,30 @@ for await (const event of provider.stream({ messages })) {
 }
 ```
 
+To show tool arguments while the model writes them, opt in with
+`provider.stream({ messages, toolArgsPreview: true })` or pass
+`toolArgsPreview: true` to root `nessi()`. Both emit the display-only event:
+
+```ts
+type ToolArgsDeltaEvent = {
+  type: "tool_args_delta";
+  callId: string;
+  name: string;
+  delta: string;
+};
+```
+
+`ToolArgsDeltaEvent` is exported from `@k2b/nessi/ai` and `@k2b/nessi`.
+Root events also carry `agentId`, `loopId`, `turnId`, and `turnIndex`.
+Fragments arrive in provider order and may contain incomplete or invalid JSON.
+They never open a block, change block indices, or become stored messages or
+tool-call aggregates. Coalescing leaves these fragments unchanged. A preview
+may stop without a final call and be followed by a `malformed_tool_call` or
+`cancelled_tool_call` issue. Never execute from a preview; only a final
+`tool_call` block is executable. Previews are off by default, and the existing
+block and issue sequence stays unchanged. `complete()` ignores previews;
+`nessi.structured()` does not enable them.
+
 ## Provider timeouts
 
 Set `timeouts` in the provider options to bound waits. Unset or non-positive
