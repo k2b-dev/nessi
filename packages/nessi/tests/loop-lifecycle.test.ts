@@ -375,6 +375,43 @@ describe("nessi loop lifecycle", () => {
     expect(assistants).toHaveLength(1);
   });
 
+  it.each([false, true])("forwards previews of a compaction retry under the new turn (coalesce=%s)", async (coalesce) => {
+    const store = memoryStore();
+    const requested: Array<boolean | undefined> = [];
+    let calls = 0;
+    const provider: Provider = {
+      ...mockProvider([]),
+      async *stream(request) {
+        requested.push(request.toolArgsPreview);
+        if (calls++ === 0) {
+          yield { type: "tool_args_delta", callId: "c1", name: "code_write", delta: '{"content":"old' };
+          yield { type: "issue", issue: { kind: "provider_error", message: "context too long", retryable: false, contextOverflow: true } };
+          return;
+        }
+        yield { type: "tool_args_delta", callId: "c1", name: "code_write", delta: '{"content":"new' };
+        yield { type: "block_start", blockId: "b0", index: 0, kind: "text" };
+        yield { type: "block_end", blockId: "b0", index: 0, block: { type: "text", text: "Done." } };
+        yield { type: "usage", usage: { input: 1, output: 1, total: 2 }, finishReason: "stop" };
+      },
+    };
+
+    const events = await collect(nessi({
+      provider, store, systemPrompt: "sys", input: "go", toolArgsPreview: true,
+      coalesce: coalesce ? { maxChars: 1000 } : undefined,
+      compact: () => Promise.resolve(),
+    }));
+
+    expect(requested).toEqual([true, true]);
+    const turns = events.filter((event) => event.type === "turn_start");
+    const previews = events.filter((event) => event.type === "tool_args_delta");
+    expect(previews.map((event) => [event.delta, event.turnId, event.turnIndex])).toEqual([
+      ['{"content":"old', turns[0]?.turnId, 0],
+      ['{"content":"new', turns[1]?.turnId, 1],
+    ]);
+    expect(turns[0]?.turnId).not.toBe(turns[1]?.turnId);
+    expect(JSON.stringify(await store.load())).not.toContain("code_write");
+  });
+
   it("closes a resumed turn when it is aborted during a pending call", async () => {
     const store = memoryStore();
     await store.append({ role: "user", content: [{ type: "text", text: "go" }] });
