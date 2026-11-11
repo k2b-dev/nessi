@@ -197,8 +197,9 @@ for await (const event of provider.stream({ messages, toolArgsPreview: true })) 
 }
 ```
 
-Previews are off by default. Each event contains one raw argument fragment in
-provider order; the accumulated text may be incomplete or invalid JSON. A
+Previews are off by default. The OpenAI-compatible adapter emits them; an
+adapter that receives a call in one piece emits none. Each event contains one
+raw argument fragment in provider order; the accumulated text may be incomplete or invalid JSON. A
 preview may stop without a final block and may be followed by a
 `malformed_tool_call` or `cancelled_tool_call` issue for the same `callId`.
 Never execute a tool from a preview. Previews do not open blocks, consume block
