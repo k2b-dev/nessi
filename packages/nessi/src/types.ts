@@ -18,6 +18,7 @@ import type {
   Provider,
   ReasoningEffort,
   StreamEvent,
+  ToolArgsDeltaEvent,
   ToolExecutionIssue,
   ToolHistoricalResultIssue,
   ToolResultMessage,
@@ -46,6 +47,7 @@ export type {
   TextBlock,
   ThinkingBlock,
   ToolCallBlock,
+  ToolArgsDeltaEvent,
   ToolExecutionIssue,
   ToolHistoricalResultIssue,
   ToolResultMessage,
@@ -90,6 +92,7 @@ export type OutboundEvent =
   | (TurnEventFields & BlockStartEvent)
   | (TurnEventFields & BlockDeltaEvent)
   | (TurnEventFields & BlockEndEvent)
+  | (TurnEventFields & ToolArgsDeltaEvent)
   | (TurnEventFields & { type: "usage"; usage: Usage; finishReason?: AssistantStopReason })
   | (LoopEventFields & { type: "issue"; issue: NessiIssue; turnId?: string; turnIndex?: number })
   | (TurnEventFields & { type: "tool_execution_start"; callId: string; name: string; args: unknown })
@@ -259,6 +262,8 @@ export type NessiOptions = {
   reasoningEffort?: ReasoningEffort;
   /** Extra request body fields for every provider call, merged over the provider's `extraBody`. */
   extraBody?: Record<string, unknown>;
+  /** Emit display-only tool_args_delta previews; never stored or executed. Off by default. */
+  toolArgsPreview?: boolean;
   coalesce?: CoalesceOptions;
   /** Max chars for tool results in the context sent to the provider. Longer results are truncated. */
   maxToolResultChars?: number;

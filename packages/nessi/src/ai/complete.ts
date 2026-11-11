@@ -25,6 +25,8 @@ export const complete = async (
 
   for await (const event of provider.stream(request)) {
     switch (event.type) {
+      // Previews are display-only; only block_end contributes to the result.
+      case "tool_args_delta":
       case "block_start":
       case "block_delta":
         break;

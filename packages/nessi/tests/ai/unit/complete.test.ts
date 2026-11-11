@@ -8,14 +8,14 @@ async function* rawSource(events: RawStreamEvent[]) {
 }
 
 describe("complete", () => {
-  it("aggregates text, thinking, tool calls and usage", async () => {
+  it.each([false, true])("aggregates only final content and usage (toolArgsPreview=%s)", async (toolArgsPreview) => {
     const provider: Provider = {
       name: "mock",
       family: "openai-compatible",
       model: "mock",
       contextWindow: 1000,
       capabilities: { streaming: true, tools: true, images: true, thinking: true, usage: true },
-      stream() {
+      stream(request) {
         return normalizeProviderStream(rawSource([
           { type: "thinking", delta: "hmm" },
           { type: "text", delta: "hello" },
@@ -23,11 +23,11 @@ describe("complete", () => {
           { type: "tool_delta", callId: "c1", argsDelta: "{\"q\":\"x\"}" },
           { type: "tool_call", callId: "c1", name: "search", args: { q: "x" } },
           { type: "usage", usage: { input: 1, output: 2, total: 3 } },
-        ]));
+        ]), { toolArgsPreview: request.toolArgsPreview });
       },
     };
 
-    const result = await complete(provider, { messages: [] });
+    const result = await complete(provider, { messages: [], toolArgsPreview });
     expect(result.finishReason).toBe("tool_use");
     expect(result.usage?.total).toBe(3);
     expect(result.message.content.map((block) => block.type)).toEqual(["thinking", "text", "tool_call"]);

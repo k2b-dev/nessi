@@ -68,6 +68,7 @@ export type {
   TextBlock,
   ThinkingBlock,
   ToolCallBlock,
+  ToolArgsDeltaEvent,
   ToolExecutionIssue,
   ToolHistoricalResultIssue,
   ToolResultMessage,
