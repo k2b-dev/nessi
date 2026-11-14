@@ -23,7 +23,7 @@ export function inBandReasoning(model: string, implicit = true) {
 
   const eligible = (value: string, index: number) => {
     if (value === "<think>") return atStart && !buffer.slice(0, index).trim();
-    if (value === "</think>") return kind === "thinking" || undecided;
+    if (value === "</think>") return kind === "thinking";
     return true;
   };
   const suffixLength = () => {

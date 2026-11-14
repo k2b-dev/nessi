@@ -88,7 +88,7 @@ test("ordinary text and structured Kimi reasoning still stream before later fram
 
 test("literal HTML-like reasoning tags inside ordinary text and JSON remain unchanged", async () => {
   for (const text of ['Use </think> here and <think> in examples.', '```ts\nconst tags = "<think>plan</think>";\n```', '{"tags":"<think>x</think>"}']) {
-    expect(await blocks([...text], "other")).toEqual([{ type: "text", text }]);
+    for (const model of ["other", "kimi-k3"]) expect(await blocks([...text], model)).toEqual([{ type: "text", text }]);
   }
   expect(await blocks([..."  <think>Plan.</think>Answer."], "other")).toEqual(expected);
 });
@@ -124,4 +124,18 @@ test("transport failures flush an ambiguous Kimi prefix into thinking before the
   for await (const event of provider().stream({ messages: [] })) events.push(event);
   expect(events.findIndex((event) => event.type === "block_end" && event.block.type === "thinking" && event.block.thinking === "Plan.")).toBeLessThan(events.findIndex((event) => event.type === "issue"));
   expect(events.some((event) => event.type === "block_start" && event.kind === "text")).toBe(false);
+});
+
+
+test("an HTML closer inside Kimi reasoning remains literal until the Kimi closer", async () => {
+  expect(await blocks([..."Use </think> as an example.<|close|>think<|sep|>Answer."])).toEqual([
+    { type: "thinking", thinking: "Use </think> as an example." }, { type: "text", text: "Answer." },
+  ]);
+});
+
+test("a refusal follows the buffered reasoning in its original order", async () => {
+  stubFetch(() => textResponse(sse([{ content: "Plan." }, { refusal: "Cannot help." }]), "text/event-stream"));
+  expect((await complete(provider(), { messages: [] })).message.content).toEqual([
+    { type: "thinking", thinking: "Plan." }, { type: "text", text: "Cannot help." },
+  ]);
 });

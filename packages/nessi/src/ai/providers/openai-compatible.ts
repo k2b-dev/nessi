@@ -459,6 +459,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           }
         }
         if (delta.refusal) {
+          yield* contentSpans(contentReasoning.flush(true));
           refused = true;
           yield { type: "text", delta: delta.refusal };
         }
