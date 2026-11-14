@@ -62,12 +62,12 @@ test("structured reasoning and inline reasoning coexist without leaking markers"
   expect(await blocks(["Plan.<|close|>think<|sep|>Answer."], "kimi-k3", true)).toEqual([{ type: "text", text: "Answer." }]);
 });
 
-test("marker-free Kimi text and truncated streams retain partial answers", async () => {
+test("marker-free Kimi text stays text on success and becomes thinking on truncated streams", async () => {
   expect(await blocks(["Answer."])).toEqual([{ type: "text", text: "Answer." }]);
   stubFetch(() => textResponse(sse([{ content: "Partial answer." }], false), "text/event-stream"));
   const events = [];
   for await (const event of provider().stream({ messages: [] })) events.push(event);
-  expect(events.some((event) => event.type === "block_end" && event.block.type === "text" && event.block.text === "Partial answer.")).toBe(true);
+  expect(events.some((event) => event.type === "block_end" && event.block.type === "thinking" && event.block.thinking === "Partial answer.")).toBe(true);
   expect(events.some((event) => event.type === "issue")).toBe(true);
 });
 
@@ -83,4 +83,45 @@ test("ordinary text and structured Kimi reasoning still stream before later fram
     controller.close();
     while (!(await stream.next()).done) { /* drain */ }
   }
+});
+
+
+test("literal HTML-like reasoning tags inside ordinary text and JSON remain unchanged", async () => {
+  for (const text of ['Use </think> here and <think> in examples.', '```ts\nconst tags = "<think>plan</think>";\n```', '{"tags":"<think>x</think>"}']) {
+    expect(await blocks([...text], "other")).toEqual([{ type: "text", text }]);
+  }
+  expect(await blocks([..."  <think>Plan.</think>Answer."], "other")).toEqual(expected);
+});
+
+test("length stops and provider errors keep the ambiguous prefix as reasoning", async () => {
+  for (const end of ['data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}\n\n', 'data: {"error":{"message":"failed","type":"server_error"}}\n\n', 'data: invalid-json\n\n']) {
+    stubFetch(() => textResponse(sse([{ content: "Plan." }], false) + end, "text/event-stream"));
+    const events = [];
+    for await (const event of provider().stream({ messages: [] })) events.push(event);
+    expect(events.some((event) => event.type === "block_end" && event.block.type === "thinking" && event.block.thinking === "Plan.")).toBe(true);
+    expect(events.some((event) => event.type === "block_start" && event.kind === "text")).toBe(false);
+  }
+});
+
+test("explicitly disabled Kimi reasoning streams answer text immediately", async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  stubFetch(() => new Response(new ReadableStream({ start(value) { controller = value; } }), { headers: { "Content-Type": "text/event-stream" } }));
+  const stream = provider().stream({ messages: [], reasoningEffort: "none" })[Symbol.asyncIterator]();
+  const pending = stream.next();
+  await Promise.resolve();
+  controller.enqueue(new TextEncoder().encode(sse([{ content: "Answer." }], false)));
+  expect((await pending).value).toMatchObject({ type: "block_start", kind: "text" });
+  controller.close();
+  while (!(await stream.next()).done) { /* drain */ }
+});
+
+test("transport failures flush an ambiguous Kimi prefix into thinking before the issue", async () => {
+  stubFetch(() => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(sse([{ content: "Plan." }], false))); },
+    pull(controller) { controller.error(new Error("connection lost")); },
+  }), { headers: { "Content-Type": "text/event-stream" } }));
+  const events = [];
+  for await (const event of provider().stream({ messages: [] })) events.push(event);
+  expect(events.findIndex((event) => event.type === "block_end" && event.block.type === "thinking" && event.block.thinking === "Plan.")).toBeLessThan(events.findIndex((event) => event.type === "issue"));
+  expect(events.some((event) => event.type === "block_start" && event.kind === "text")).toBe(false);
 });

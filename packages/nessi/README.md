@@ -457,7 +457,7 @@ Recent vLLM versions also pass the level to the chat template and turn off
 thinking for templates such as Qwen's when it is `"none"`. On older versions,
 use `extraBody: { chat_template_kwargs: { enable_thinking: false } }`.
 
-The OpenAI-compatible adapter also reads in-band `<think>…</think>` and
+The OpenAI-compatible adapter also reads an initial `<think>…</think>` span and
 `<|open|>think<|sep|>…<|close|>think<|sep|>` markers across deltas.
 Markers are removed before text and thinking blocks are emitted, including
 incomplete control syntax at the end of a stream. Kimi K3 can omit the opening
@@ -465,7 +465,8 @@ marker: its ambiguous initial content is held until the closing marker,
 structured reasoning, a tool call, or stream end identifies the span. Without
 any marker it remains text. This can delay the first text for Kimi K3 endpoints
 that send neither an opener nor structured reasoning. Regular `reasoning_content`
-deltas continue streaming immediately. `compat.thinkingFormat: "none"` hides
+deltas continue streaming immediately, as does text with `reasoningEffort: "none"`.
+An ambiguous Kimi prefix interrupted by an error or output limit stays thinking. `compat.thinkingFormat: "none"` hides
 in-band thinking as well.
 
 Thinking appears as `thinking` blocks. Some endpoints sign their reasoning or

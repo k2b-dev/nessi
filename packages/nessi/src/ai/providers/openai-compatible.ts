@@ -361,7 +361,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           }
         }
       };
-      const contentReasoning = inBandReasoning(config.model);
+      const contentReasoning = inBandReasoning(config.model, resolveReasoning(request, config) !== "none");
       const contentSpans = function* (spans: ReturnType<typeof contentReasoning.push>): Generator<RawStreamEvent> {
         for (const span of spans) {
           if (span.type === "thinking" && config.compat?.thinkingFormat === "none") continue;
@@ -413,13 +413,13 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         if (!event.data.trim()) continue;
         const chunk = parseJsonRecord<SSEChunk>(event.data);
         if (!chunk) {
-          yield* contentSpans(contentReasoning.flush());
+          yield* contentSpans(contentReasoning.flush(true));
           yield malformedRecordError(config.name);
           return;
         }
         const envelope = errorEnvelope(`${config.name} stream`, chunk);
         if (envelope) {
-          yield* contentSpans(contentReasoning.flush());
+          yield* contentSpans(contentReasoning.flush(true));
           yield { type: "error", ...envelope };
           return;
         }
@@ -510,10 +510,10 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
       }
 
       } catch (error) {
-        yield* contentSpans(contentReasoning.flush());
+        yield* contentSpans(contentReasoning.flush(true));
         throw error;
       }
-      yield* contentSpans(contentReasoning.flush());
+      yield* contentSpans(contentReasoning.flush(refused || latestFinishReason === "max_tokens" || latestFinishReason === "error" || (!latestFinishReason && !sawDone)));
       if (!latestFinishReason && !sawDone) {
         yield streamEndedError(config.name);
         return;
