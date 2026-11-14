@@ -1,0 +1,169 @@
+data: {"choices": [{"index": 0, "delta": {"content": "Wait — one issue: `notebooks` from th"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "e SDK is based on the app export, not"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " `notebooks.notebook.browse`. Looking"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " at the SDK declarations more careful"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ly:\n\n```ts\ntype Handle0<Id extends st"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ring = string> = CodeHandle<\"cloud.ap"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "p\", Id> & { readonly \"annotation\": .."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "., readonly \"notebook\": { ... browse,"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " list, read, search ... } }\n```\n\nSo `"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "notebooks.notebook.browse(...)` — `no"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "tebooks` is the Cloud app export, and"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " `notebook` is a nested resource meth"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "od namespace. Actually looking again:"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "\n\n```ts\nexport declare const notebook"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "s: Handle0<\"notebooks\"> & { readonly "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "\"annotation\": ..., readonly \"notebook"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "\": (<const Id extends string>(id: Id)"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " => Handle4<Id>) }\n```\n\nSo `notebooks"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": ".notebook` is a factory function that"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " takes an ID and returns Handle4. The"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "re's no direct `browse` on it. The br"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "owse method is on `Handle0[\"notebook\""}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "]` — wait, let me re-read:\n\n```ts\ntyp"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "e Handle0<Id extends string = string>"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " = CodeHandle<\"cloud.app\", Id> & { re"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "adonly \"annotation\": {...}; readonly "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "\"comment\": {...}; readonly \"note\": {."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "..}; readonly \"notebook\": { readonly "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "\"activity\": query; readonly \"browse\":"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " query; ... } }\n```\n\nSo `Handle0[\"not"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ebook\"]` is an object with `browse`, "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "`list`, etc. AND separately:\n```ts\nex"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "port declare const notebooks: Handle0"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "<\"notebooks\"> & { readonly \"annotatio"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "n\": (id) => Handle1; ...; readonly \"n"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "otebook\": (id) => Handle4 }\n```\n\nSo `"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "notebooks.notebook` is BOTH: an objec"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "t with query methods (browse, list) A"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ND a factory function for Handle4 (ac"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "tions)? In TypeScript that's a merged"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " callable object. In effect:\n- `noteb"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ooks.notebook.browse({...})` — Query "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "(via Handle0[\"notebook\"].browse)\n- `n"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "otebooks.notebook(id).note.create({.."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": ".})` — Action via factory (the & part"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": ")\n\nWait, but there's ambiguity. The H"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "andle0 type declares `readonly \"noteb"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ook\": { browse, activity, list, read,"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " search, containers }` — an object. T"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "he export type declares `readonly \"no"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "tebook\": (<const Id extends string>(i"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "d: Id) => Handle4<Id>)` — a function."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " The SDK likely merges both so that `"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "notebooks.notebook` has both the quer"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "y methods AND is callable as factory."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " In TypeScript this would be an inter"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "section: `ObjectWithQueries & Factory"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "Function`.\n\nSo my code:\n- `notebooks."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "notebook.browse({ minimumPermission: "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "\"write\", limit: 20 })` ✓ — should wor"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "k\n- `notebooks.notebook(values.notebo"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ok).note.create({...})` ✓ — factory +"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " action\n\nGood. But never assume: the "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "checker will tell.\n\nOne concern: `not"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ebooks.notebook(id).note.create` has "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "policy `silent_shared` — \"actions tha"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "t ask a person never run unattended\","}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " and silent means no notification. It"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": " should be fine — it's a note creatio"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "n, not something that involves others"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": ".\n\nAlso — page requests have 8 second"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "s, `loadNotebooks()` + note.create mi"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ght take a bit. Should be OK.\n\nNow th"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "e test fixture needs to mock `noteboo"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ks.notebook.browse` since we removed "}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "the global variable assignment. Updat"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "e test/default.json to mock the brows"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "e call, or the GET / test will fail d"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "ue to missing mock.<|close|>think<|se"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "p|>Jetzt aktualisiere ich das Test-Fi"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "xture mit den gemockten Notebook-Date"}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "n und prüfe alles."}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "code_write:20", "type": "function", "function": {"name": "code_write", "arguments": "{\"path\": \"test/default.json\", \"codeId\": \"c_fa4659c76a20\", \"content\": \"{\\n  \\\"version\\\": 1,\\n  \\\"name\\\": \\\"Rechner-Seite lädt und Berechnung speichert\\\",\\n  \\\"now\\\": 1763159319000,\\n  \\\"seed\\\": 42,\\n  \\\"mocks\\\": [\\n    {\\n      \\\"operation\\\": \\\"notebooks.notebook.browse\\\",\\n      \\\"target\\\": null,\\n      \\\"refs\\\": {},\\n      \\\"input\\\": { \\\"minimumPermission\\\": \\\"write\\\", \\\"limit\\\": 20 },\\n      \\\"replies\\\": [\\n        {\\n          \\\"ok\\\": true,\\n          \\\"data\\\": {\\n            \\\"data\\\": [\\n              {\\n                \\\"homepageNoteId\\\": null,\\n                \\\"permission\\\": \\\"write\\\",\\n                \\\"preview\\\": null,\\n                \\\"ref\\\": { \\\"id\\\": \\\"ABC123\\\", \\\"type\\\": \\\"notebooks.notebook\\\" },\\n                \\\"title\\\": \\\"Meine Notizen\\\"\\n              }\\n            ],\\n            \\\"page\\\": { \\\"hasMore\\\": false }\\n          }\\n        },\\n        {\\n          \\\"ok\\\": true,\\n          \\\"data\\\": {\\n            \\\"data\\\": [\\n              {\\n                \\\"homepageNoteId\\\": null,\\n                \\\"permission\\\": \\\"write\\\",\\n                \\\"preview\\\": null,\\n                \\\"ref\\\": { \\\"id\\\": \\\"ABC123\\\", \\\"type\\\": \\\"notebooks.notebook\\\" },\\n                \\\"title\\\": \\\"Meine Notizen\\\"\\n              }\\n            ],\\n            \\\"page\\\": { \\\"hasMore\\\": false }\\n          }\\n        }\\n      ]\\n    },\\n    {\\n      \\\"operation\\\": \\\"notebooks.notebook.note.create\\\",\\n      \\\"target\\\": { \\\"type\\\": \\\"notebooks.notebook\\\", \\\"id\\\": \\\"ABC123\\\" },\\n      \\\"refs\\\": {},\\n      \\\"input\\\": {\\n        \\\"content\\\": \\\"# Berechnung 6 × 7 = 42\\\\n\\\\n- **Rechnung:** 6 × 7\\\\n- **Ergebnis:** 42\\\\n- **Zeitpunkt:** 14.11.2026, 16:48\\\\n\\\\n> Erstellt durch den Taschenrechner.\\\",\\n        \\\"idempotencyKey\\\": \\\"x\\\"\\n      },\\n      \\\"replies\\\": [\\n        {\\n          \\\"ok\\\": true,\\n          \\\"data\\\": {\\n            \\\"createdAt\\\": \\\"2026-11-14T16:48:39.000Z\\\",\\n            \\\"hasChildren\\\": false,\\n            \\\"historyIncomplete\\\": false,\\n            \\\"id\\\": \\\"N45678\\\",\\n            \\\"locked\\\": false,\\n            \\\"notebookId\\\": \\\"ABC123\\\",\\n            \\\"parentId\\\": null,\\n            \\\"position\\\": 0,\\n            \\\"title\\\": \\\"Berechnung 6 × 7 = 42\\\",\\n            \\\"updatedAt\\\": \\\"2026-11-14T16:48:39.000Z\\\"\\n          }\\n        }\\n      ]\\n    }\\n  ],\\n  \\\"runs\\\": [\\n    {\\n      \\\"entrypoint\\\": \\\"route:GET:/\\\",\\n      \\\"input\\\": null\\n    },\\n    {\\n      \\\"entrypoint\\\": \\\"route:POST:/rechne\\\",\\n      \\\"input\\\": null\\n    }\\n  ]\\n}\\n\"}"}}]}, "finish_reason": null}]}
+
+data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+
+data: [DONE]
