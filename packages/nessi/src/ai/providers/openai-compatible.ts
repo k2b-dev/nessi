@@ -1,3 +1,4 @@
+import { inBandReasoning } from "../shared/in-band-reasoning.js";
 import { buildRequest, errorEnvelope, malformedRecordError, streamEndedError } from "../shared/errors.js";
 import { assertOnlySupportedFiles } from "../shared/messages.js";
 import { ensureRecord, parseJsonRecord, safeJsonParse, stringifyJson, toolArgumentsText } from "../shared/json.js";
@@ -360,6 +361,14 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           }
         }
       };
+      const contentReasoning = inBandReasoning(config.model);
+      const contentSpans = function* (spans: ReturnType<typeof contentReasoning.push>): Generator<RawStreamEvent> {
+        for (const span of spans) {
+          if (span.type === "thinking" && config.compat?.thinkingFormat === "none") continue;
+          if (span.type === "thinking" && pendingToolCalls.length > 0) deferredThinking += span.delta;
+          else yield span;
+        }
+      };
       let deferredThinking = "";
       let refused = false;
       const flushDeferredThinking = function* (): Generator<RawStreamEvent> {
@@ -395,6 +404,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         pendingToolCalls.length = 0;
       };
 
+      try {
       for await (const event of result.events) {
         if (event.data === "[DONE]") {
           sawDone = true;
@@ -403,11 +413,13 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         if (!event.data.trim()) continue;
         const chunk = parseJsonRecord<SSEChunk>(event.data);
         if (!chunk) {
+          yield* contentSpans(contentReasoning.flush());
           yield malformedRecordError(config.name);
           return;
         }
         const envelope = errorEnvelope(`${config.name} stream`, chunk);
         if (envelope) {
+          yield* contentSpans(contentReasoning.flush());
           yield { type: "error", ...envelope };
           return;
         }
@@ -426,6 +438,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         // Typed reasoning chunks carry the signature; the plain fields would only repeat their text.
         const chunkedThinking = Array.isArray(delta.content) && delta.content.some((chunk) => chunk.type === "thinking");
         const thinking = chunkedThinking ? "" : thinkingFromDelta(delta, config);
+        if (thinking || chunkedThinking) yield* contentSpans(contentReasoning.structured());
         // Reasoning that arrives while a tool call is still streaming waits until the call is complete.
         if (thinking && pendingToolCalls.length > 0) deferredThinking += thinking;
         else if (thinking) yield { type: "thinking", delta: thinking };
@@ -433,11 +446,11 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
           (delta.reasoning_details ?? []).forEach(collectReasoningDetail);
         }
         if (typeof delta.content === "string") {
-          if (delta.content) yield { type: "text", delta: delta.content };
+          if (delta.content) yield* contentSpans(contentReasoning.push(delta.content));
         } else {
           for (const chunk of delta.content ?? []) {
             if (chunk.type === "text" && "text" in chunk) {
-              if (chunk.text) yield { type: "text", delta: chunk.text };
+              if (chunk.text) yield* contentSpans(contentReasoning.push(chunk.text));
             } else if (chunk.type === "thinking" && "thinking" in chunk && config.compat?.thinkingFormat !== "none") {
               const text = chunkThinking(chunk);
               if (text) yield { type: "thinking", delta: text };
@@ -451,6 +464,7 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
 
         if (delta.tool_calls) {
+          yield* contentSpans(contentReasoning.flush());
           for (const toolCall of delta.tool_calls) {
             const current = toolBuffers.get(toolCall.index);
             // Some servers reuse one index for parallel calls; a new id starts a new call.
@@ -495,6 +509,11 @@ export const openAICompatible = (config: OpenAICompatibleConfig): Provider => {
         }
       }
 
+      } catch (error) {
+        yield* contentSpans(contentReasoning.flush());
+        throw error;
+      }
+      yield* contentSpans(contentReasoning.flush());
       if (!latestFinishReason && !sawDone) {
         yield streamEndedError(config.name);
         return;
